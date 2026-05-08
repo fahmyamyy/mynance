@@ -1,0 +1,14 @@
+server:
+  port: "8080"
+
+log:
+  level: "info"
+
+database:
+  url: "postgres://postgres:postgres@localhost:5432/mynance?sslmode=disable"
+
+db:
+  max_conns: 10
+
+outbox:
+  poll_interval_seconds: 1
