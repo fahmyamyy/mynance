@@ -1,0 +1,342 @@
+openapi: "3.0.3"
+
+info:
+  title: Mynance CEX API
+  version: "0.3.0"
+  description: Centralized Exchange — user & account management
+
+servers:
+  - url: http://localhost:8080
+    description: Local dev
+
+paths:
+  /users:
+    post:
+      summary: Create user
+      operationId: createUser
+      tags: [Users]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateUserRequest"
+      responses:
+        "201":
+          description: User created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+    get:
+      summary: List users
+      operationId: listUsers
+      tags: [Users]
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: List of users
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/UserResponse"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /users/{id}:
+    get:
+      summary: Get user by ID
+      operationId: getUser
+      tags: [Users]
+      parameters:
+        - $ref: "#/components/parameters/ID"
+      responses:
+        "200":
+          description: User found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+    delete:
+      summary: Delete user (soft delete)
+      operationId: deleteUser
+      tags: [Users]
+      parameters:
+        - $ref: "#/components/parameters/ID"
+      responses:
+        "204":
+          description: User deleted
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /accounts:
+    post:
+      summary: Create account
+      operationId: createAccount
+      tags: [Accounts]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAccountRequest"
+      responses:
+        "201":
+          description: Account created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccountResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+    get:
+      summary: List accounts
+      operationId: listAccounts
+      tags: [Accounts]
+      parameters:
+        - name: user_id
+          in: query
+          required: false
+          description: Filter by user UUID
+          schema:
+            type: string
+            format: uuid
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: List of accounts
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AccountResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /accounts/{id}:
+    get:
+      summary: Get account by ID
+      operationId: getAccount
+      tags: [Accounts]
+      parameters:
+        - $ref: "#/components/parameters/ID"
+      responses:
+        "200":
+          description: Account found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccountResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+    delete:
+      summary: Delete account
+      operationId: deleteAccount
+      tags: [Accounts]
+      parameters:
+        - $ref: "#/components/parameters/ID"
+      responses:
+        "204":
+          description: Account deleted
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /accounts/{id}/balance:
+    get:
+      summary: Get account balance
+      operationId: getAccountBalance
+      tags: [Accounts]
+      parameters:
+        - $ref: "#/components/parameters/ID"
+      responses:
+        "200":
+          description: Balance derived from ledger SUM
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BalanceResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+components:
+  parameters:
+    ID:
+      name: id
+      in: path
+      required: true
+      description: Resource UUID
+      schema:
+        type: string
+        format: uuid
+    Limit:
+      name: limit
+      in: query
+      required: false
+      description: Max results (default 50, max 100)
+      schema:
+        type: integer
+        default: 50
+        maximum: 100
+    Offset:
+      name: offset
+      in: query
+      required: false
+      description: Pagination offset
+      schema:
+        type: integer
+        default: 0
+
+  schemas:
+    CreateUserRequest:
+      type: object
+      required: [email, username, full_name, password]
+      properties:
+        email:
+          type: string
+          format: email
+          example: john@example.com
+        username:
+          type: string
+          minLength: 3
+          maxLength: 100
+          example: johndoe
+        full_name:
+          type: string
+          maxLength: 255
+          example: John Doe
+        password:
+          type: string
+          format: password
+          minLength: 8
+          description: Plaintext password — hashed server-side via bcrypt
+
+    UserResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        username:
+          type: string
+        full_name:
+          type: string
+        status:
+          type: string
+          enum: [ACTIVE, SUSPENDED, CLOSED]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    CreateAccountRequest:
+      type: object
+      required: [user_id, asset]
+      properties:
+        user_id:
+          type: string
+          format: uuid
+        asset:
+          type: string
+          maxLength: 20
+          example: BTC
+
+    AccountResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        asset:
+          type: string
+          example: BTC
+        created_at:
+          type: string
+          format: date-time
+
+    BalanceResponse:
+      type: object
+      properties:
+        balance:
+          type: string
+          description: NUMERIC(30,10) as string — avoids float precision loss
+          example: "1.5000000000"
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+
+  responses:
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Conflict:
+      description: Resource already exists
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    InternalError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
