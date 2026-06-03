@@ -7,10 +7,14 @@ Features:
 - Order state machine (`OPEN` → `PARTIAL` → `FILLED` / `CANCELLED`)
 - In-memory price-time priority matching engine with FIFO within a price level
 - Atomic trade settlement — exactly 4 double-entry ledger writes, zero-sum validated before commit
-- Idempotency enforcement on order creation and trade execution
+- Idempotency enforcement on order creation, trade execution, withdrawals
 - Transactional outbox for at-least-once event publishing
-- In-memory market data (order book + recent trades) with engine event subscription
-- Graceful shutdown for HTTP, outbox publisher, and engine goroutine
+- JWT authentication (HS256, 24h TTL) — designed for Auth.js Credentials provider
+- Role-based authorization (USER / ADMIN) with resource-owner enforcement
+- Wallet addresses + two-step deposit (PENDING → CONFIRMED, webhook-shaped)
+- Instant-deduct withdrawals with client idempotency keys
+- Binance market data via WebSocket (orderbook depth, recent trades, 24h ticker)
+- Graceful shutdown for HTTP, outbox publisher, engine, and marketfeed goroutines
 
 ---
 
@@ -66,6 +70,9 @@ Config loaded in order: **env vars → `config/application.yaml` → defaults**.
 | `LOG_LEVEL` | `log.level` | `info` | `debug` / `info` / `warn` / `error` |
 | `DB_MAX_CONNS` | `db.max_conns` | `10` | pgx pool size |
 | `OUTBOX_POLL_INTERVAL_SECONDS` | `outbox.poll_interval_seconds` | `1` | publisher tick |
+| `JWT_SECRET` | `jwt.secret` | (required, ≥32 chars) | HS256 signing key; server fails to start otherwise |
+| `BINANCE_SYMBOLS` | `binance.symbols` | `BTC-USDT,ETH-USDT,SOL-USDT` | CSV; symbols streamed from Binance |
+| `MARKETFEED_ENABLED` | `marketfeed.enabled` | `true` | Set `false` to skip WS connection (tests, offline dev) |
 
 ---
 
@@ -76,22 +83,28 @@ Vertical-slice layout under `internal/`:
 ```
 cmd/server/            # Binary entry point — wires everything
 internal/
-  user/                # User CRUD
+  auth/                # JWT sign/verify, middleware, context helpers, RequireAdmin
+  user/                # User CRUD + login + role
   account/             # Account per (user, asset)
   ledger/              # Append-only entries, balance via SUM
   idempotency/         # UNIQUE(key, scope) dedup
   outbox/              # Transactional event publisher
   order/               # Order lifecycle, RESERVE / RELEASE
   trade/               # Atomic trade settlement (4 entries, zero-sum)
+  wallet/              # Per-(user, asset) mock deposit addresses
+  deposit/             # PENDING → CONFIRMED/REJECTED state machine
+  withdrawal/          # Instant-deduct withdrawals
   engine/              # In-memory matching engine + settlement subscriber
   eventbus/            # Async pub/sub with panic isolation
-  marketdata/          # In-memory book view + recent trades
+  marketdata/          # In-memory book view + recent trades (local engine)
+  marketfeed/          # Binance WebSocket aggregation (display data)
   shared/              # Sentinel errors, HTTP helpers
 pkg/
   numeric/             # big.Rat arithmetic over pgtype.Numeric
   timeutil/            # UTC time helper
   validate/            # Validator wrapper
-migrations/            # SQL migrations (00001..00007)
+  crypto/              # bcrypt password helpers
+migrations/            # SQL migrations (00001..00011)
 config/                # Config schema + YAML defaults
 ```
 
@@ -178,6 +191,50 @@ OPEN ─→ PARTIAL ─→ FILLED
 
 - `ORDER` — placed-order dedup. Key supplied by client per `POST /orders`.
 - `TRADE` — settled-trade dedup. Key supplied by client per manual `POST /trades`, or derived as `match-<buyID>-<sellID>-<seq>` for engine-driven settlement.
+- `WITHDRAW` — withdrawal dedup. Key supplied by client per `POST /accounts/{id}/withdraw`.
+
+Note: deposit idempotency is enforced via the `tx_hash UNIQUE` constraint on the `deposits` table — no separate idempotency key required.
+
+---
+
+## Authentication
+
+All endpoints except the public allow-list require a JWT.
+
+**Public routes** (no token): `POST /users`, `POST /login`, `GET /health`, `/orderbook/*`, `/marketdata/trades/*`, `/markets/*`.
+**Protected routes** (need `Authorization: Bearer <token>`): everything else.
+**Admin-only routes** (`role=ADMIN`): `/admin/*`.
+
+### `POST /login`
+
+```jsonc
+// Request
+{ "email": "alice@example.com", "password": "passw0rd!ABC" }
+
+// 200 OK
+{
+  "token": "eyJhbGciOiJIUzI1...",
+  "user": { "id": "...", "email": "...", "username": "...", "role": "USER", ... }
+}
+```
+
+Shape matches what Auth.js Credentials provider's `authorize` callback returns. Wrong password or unknown email → `401`.
+
+### `GET /me`
+
+Returns the authenticated user (re-read from DB). Used for Auth.js session refresh.
+
+### JWT settings
+
+- Algorithm: HS256
+- TTL: 24 hours
+- Claims: `sub` (user_id), `role`, `iat`, `exp`
+- Signing key: `JWT_SECRET` env var (≥32 chars)
+- Admin promotion (MVP): `UPDATE users SET role='ADMIN' WHERE email = $1`
+
+### Resource-owner enforcement
+
+Endpoints that take a `{id}` for an account, order, or `/users/{userID}/...` path check `ctx.user_id == resource.owner_id` and return `403 Forbidden` on mismatch. ADMIN role bypasses the check.
 
 ---
 
@@ -211,6 +268,7 @@ GET /health → 200 "ok"
   "username": "alice",
   "full_name": "Alice Doe",
   "status": "ACTIVE",
+  "role": "USER",
   "created_at": "2026-06-03T10:00:00Z",
   "updated_at": "2026-06-03T10:00:00Z"
 }
@@ -221,6 +279,7 @@ Validation: `email` valid format, `username` 3-100 chars, `full_name` ≤255 cha
 Behavior:
 - Password is hashed with bcrypt before storage; never returned
 - `email` and `username` are unique — duplicate returns `409 Conflict`
+- New users default to `role=USER`. Admin promotion via SQL.
 
 #### `GET /users`
 List users. Query: `?limit=N&offset=N` (default 50/0, max 100). Returns `200` array of `UserResponse`.
@@ -232,7 +291,10 @@ Returns `200 UserResponse` or `404`.
 Soft-delete (sets `deleted_at`). Returns `204`.
 
 #### `GET /users/{userID}/orders`
-List orders for user. Same pagination as `/users`. Returns `200` array of `OrderResponse`.
+List orders for user. Same pagination as `/users`. Owner-scoped (403 for non-owner non-admin). Returns `200` array of `OrderResponse`.
+
+#### `GET /users/{userID}/trades`
+List trades for user with side derived per user. Owner-scoped. Each entry: `{id, symbol, side, price, quantity, counterparty_user_id, created_at}`.
 
 ---
 
@@ -241,16 +303,13 @@ List orders for user. Same pagination as `/users`. Returns `200` array of `Order
 #### `POST /accounts`
 
 ```jsonc
-// Request
-{
-  "user_id": "01952c8c-...",
-  "asset": "USDT"
-}
+// Request — user_id is NOT accepted; server takes it from JWT
+{ "asset": "USDT" }
 
 // 201 Created
 {
   "id": "01952c8d-...",
-  "user_id": "01952c8c-...",
+  "user_id": "01952c8c-...",   // from token
   "asset": "USDT",
   "created_at": "2026-06-03T10:00:00Z"
 }
@@ -261,10 +320,10 @@ Behavior:
 - Account has no balance column. Balance is derived from `ledger_entries`.
 
 #### `GET /accounts`
-List accounts. Query: `?user_id=<uuid>` to filter, `?limit&offset` for pagination.
+List accounts. Non-admins always scoped to `ctx.user_id`. Admins may pass `?user_id=<uuid>` to filter. Pagination via `?limit&offset`.
 
 #### `GET /accounts/{id}`
-Returns `200 AccountResponse` or `404`.
+Owner-scoped. Returns `200 AccountResponse`, `403`, or `404`.
 
 #### `GET /accounts/{id}/balance`
 
@@ -273,10 +332,34 @@ Returns `200 AccountResponse` or `404`.
 { "balance": "100000.0000000000" }
 ```
 
-Computed as `SUM(amount) FROM ledger_entries WHERE user_id = ? AND asset = ?`. Returns `"0"` if no entries.
+Computed as `SUM(amount) FROM ledger_entries WHERE user_id = ? AND asset = ?`. Returns `"0"` if no entries. Owner-scoped.
 
 #### `DELETE /accounts/{id}`
-Returns `204`. Does not delete ledger entries — historical records preserved.
+Owner-scoped. Returns `204`. Does not delete ledger entries — historical records preserved.
+
+#### `POST /accounts/{id}/withdraw`
+
+```jsonc
+// Request
+{ "amount": "100", "idempotency_key": "client-uuid" }
+
+// 200 OK
+{
+  "withdrawal_id": "01952cb3-...",
+  "account_id": "01952c8d-...",
+  "amount": "100.0000000000",
+  "new_balance": "99900.0000000000",
+  "status": "COMPLETED",
+  "created_at": "2026-06-04T10:00:01Z"
+}
+```
+
+Behavior:
+- Validates `amount > 0` and `balance >= amount` (else 422 `ErrInsufficientFunds`)
+- Single tx: idempotency key (scope=`WITHDRAW`) + WITHDRAW ledger entry (negative) + `withdrawals` row + outbox event `WITHDRAW_REQUESTED`
+- Instant deduct (no PROCESSING state in MVP)
+- Owner-scoped — 403 if `ctx.user_id != account.user_id`
+- Duplicate `idempotency_key` → 200 OK, no re-execution
 
 ---
 
@@ -285,9 +368,8 @@ Returns `204`. Does not delete ledger entries — historical records preserved.
 #### `POST /orders`
 
 ```jsonc
-// Request
+// Request — user_id is NOT accepted; server takes it from JWT
 {
-  "user_id": "01952c8c-...",
   "symbol": "BTC-USDT",
   "side": "BUY",
   "price": "30000",
@@ -298,7 +380,7 @@ Returns `204`. Does not delete ledger entries — historical records preserved.
 // 201 Created
 {
   "id": "01952c8e-...",
-  "user_id": "01952c8c-...",
+  "user_id": "01952c8c-...",   // from token
   "symbol": "BTC-USDT",
   "side": "BUY",
   "price": "30000.0000000000",
@@ -324,11 +406,11 @@ Behavior:
 - If engine submit fails (channel full), order remains `OPEN`; placement still succeeds. Operator can retry via admin route.
 
 #### `GET /orders/{id}`
-Returns `200 OrderResponse` or `404`.
+Owner-scoped. Returns `200 OrderResponse`, `403`, or `404`.
 
 #### `DELETE /orders/{id}`
 
-Cancel an order. Returns `200 OrderResponse` (status=CANCELLED).
+Cancel an order. Owner-scoped. Returns `200 OrderResponse` (status=CANCELLED).
 
 Behavior:
 - Validates state: only `OPEN` or `PARTIAL` cancellable; otherwise `409 ErrInvalidStateTransition`
@@ -419,6 +501,134 @@ Empty array if no trades for the symbol.
 
 ---
 
+### Wallets
+
+#### `POST /wallets`
+
+```jsonc
+// Request
+{ "asset": "BTC" }
+
+// 200 OK
+{
+  "id": "01952cb0-...",
+  "asset": "BTC",
+  "address": "mock-btc-a1b2c3d4-f9e8d7c6",
+  "created_at": "2026-06-04T10:00:00Z"
+}
+```
+
+Behavior:
+- Idempotent on `(user_id, asset)`: second call returns the existing address
+- Requires an account for the asset to exist first; else 422 `ErrValidation`
+- Mock addresses prefixed `mock-` to prevent confusion with real chain addresses. Real-chain integration replaces only the generator; table layout unchanged.
+
+#### `GET /wallets`
+Returns array of own wallet addresses. Empty array if none.
+
+---
+
+### Deposits
+
+Two-step flow (intake → confirm). The intake endpoint is the **mock** webhook. Production replaces it with an HMAC-verified `POST /webhooks/deposits` — `/confirm` stays identical.
+
+#### `GET /deposits` (USER)
+Paginated list of own deposits across all statuses.
+
+```jsonc
+[
+  {
+    "id": "01952cb1-...",
+    "user_id": "01952c8c-...",
+    "asset": "USDT",
+    "address": "mock-usdt-a1b2c3d4-f9e8d7c6",
+    "amount": "100.0000000000",
+    "tx_hash": "0xdead...",
+    "status": "PENDING",
+    "created_at": "2026-06-04T10:00:00Z"
+  }
+]
+```
+
+Status: `PENDING` / `CONFIRMED` / `REJECTED`.
+
+#### `POST /admin/deposits/intake` (ADMIN)
+
+```jsonc
+// Request
+{
+  "address": "mock-usdt-a1b2c3d4-f9e8d7c6",
+  "asset": "USDT",
+  "amount": "100",
+  "tx_hash": "0xdead..."
+}
+
+// 201 Created — DepositResponse with status="PENDING"
+```
+
+Behavior:
+- Resolves address → user_id via `wallet_addresses` lookup
+- Inserts PENDING row; **no ledger entry yet**
+- `tx_hash UNIQUE` constraint → duplicate intake returns 409
+
+#### `POST /admin/deposits/{id}/confirm` (ADMIN)
+
+Atomically (single tx):
+- Locks the deposit row (PENDING-only; else 409 `ErrInvalidStateTransition`)
+- Inserts DEPOSIT ledger entry (positive amount)
+- UPDATE deposit `status='CONFIRMED'`, `confirmed_at=now()`
+- Inserts outbox event `DEPOSIT_CONFIRMED`
+
+#### `POST /admin/deposits/{id}/reject` (ADMIN)
+
+UPDATE deposit `status='REJECTED'`. No ledger impact. Used for invalid/fraud detection.
+
+---
+
+### Markets (Binance feed, read-only)
+
+Streamed from Binance via WebSocket; **display-only**. Trading still matches against the local engine via `/orders` and `/orderbook/{symbol}`.
+
+#### `GET /markets`
+Returns array of ticker snapshots for all symbols in `BINANCE_SYMBOLS`. Empty array before first snapshot.
+
+#### `GET /markets/{symbol}/orderbook`
+
+```jsonc
+{
+  "symbol": "BTC-USDT",
+  "bids": [[30000.5, 0.5], [30000.0, 1.2]],
+  "asks": [[30001.0, 0.3]]
+}
+```
+
+Top-20 levels each side. 404 if `symbol` not in `BINANCE_SYMBOLS`. 503 if no snapshot received yet or last update older than 60s.
+
+#### `GET /markets/{symbol}/trades`
+
+```jsonc
+[
+  { "price": 30000, "qty": 0.5, "timestamp": "2026-06-04T10:00:01Z", "is_buyer_maker": false }
+]
+```
+
+Last 100 trades, most recent first.
+
+#### `GET /markets/{symbol}/ticker`
+
+```jsonc
+{
+  "symbol": "BTC-USDT",
+  "open": 29500, "high": 30100, "low": 29400,
+  "close": 30000, "volume": 1234.5,
+  "change_24h": 500, "change_pct_24h": 1.69
+}
+```
+
+503 if stale (>60s) or disabled.
+
+---
+
 ## Matching engine
 
 Single-goroutine, in-memory, per-symbol order book. Algorithm per `matching.md`:
@@ -472,17 +682,20 @@ Tables:
 
 | Table | Purpose | Mutability |
 |---|---|---|
-| `users` | Identity, hashed password, status | UPDATE/DELETE (soft) |
+| `users` | Identity, hashed password, status, role | UPDATE/DELETE (soft) |
 | `accounts` | (user_id, asset) registration | UPDATE/DELETE |
 | `ledger_entries` | Append-only financial truth | INSERT only |
 | `orders` | Order lifecycle | INSERT + status/filled UPDATEs |
 | `trades` | Settled trade record | INSERT only |
 | `idempotency_keys` | (key, scope) dedup | INSERT only |
 | `outbox_events` | Pending events | INSERT + status UPDATE |
+| `wallet_addresses` | Per-(user, asset) deposit address | INSERT only |
+| `deposits` | Two-step deposit (PENDING → CONFIRMED/REJECTED) | INSERT + status UPDATE |
+| `withdrawals` | Withdrawal audit record | INSERT only |
 
 All financial amounts: `NUMERIC(30, 10)`. Floats forbidden at DB layer.
 
-Migrations applied with `make migrate` (goose). Files: `migrations/00001_*` through `00007_*`.
+Migrations applied with `make migrate` (goose). Files: `migrations/00001_*` through `00011_*`.
 
 ---
 
@@ -518,6 +731,7 @@ Unit tests cover:
 - Settlement subscriber (event → ExecuteTrade call)
 - Market data (book view updates, trade history cap)
 - Trade fill logic (FILLED vs PARTIAL, zero-sum math)
+- Marketfeed symbol translator + staleness gate
 
 Integration tests cover:
 - Idempotency: duplicate rejection, scope isolation, rollback retry
@@ -536,8 +750,10 @@ Integration tests cover:
 | `POST /orders` | `ORDER` | Client-supplied `idempotency_key` |
 | `POST /trades` | `TRADE` | Client-supplied `idempotency_key` |
 | Engine-driven trade settlement | `TRADE` | Server-derived `match-{buyID}-{sellID}-{seq}` |
+| `POST /accounts/{id}/withdraw` | `WITHDRAW` | Client-supplied `idempotency_key` |
+| `POST /admin/deposits/intake` | n/a | `tx_hash UNIQUE` constraint on `deposits` table |
 
-On duplicate: server returns `200 OK` empty body (no re-execution, no new rows).
+On duplicate: server returns `200 OK` empty body (no re-execution, no new rows). Deposit intake returns `409 Conflict` on duplicate `tx_hash`.
 
 ---
 
@@ -547,16 +763,28 @@ On duplicate: server returns `200 OK` empty body (no re-execution, no new rows).
 
 `SIGINT` / `SIGTERM` triggers:
 1. HTTP server stops accepting new connections; 10-second drain for in-flight requests
-2. `workerCtx` cancellation propagates to engine goroutine and outbox publisher
-3. Both workers exit cleanly via `ctx.Done()` select
+2. `workerCtx` cancellation propagates to engine, outbox publisher, and Binance marketfeed goroutines
+3. All workers exit cleanly via `ctx.Done()` select
 4. Pool closed last
+
+### Admin promotion
+
+```sql
+UPDATE users SET role = 'ADMIN' WHERE email = 'ops@mynance.local';
+```
+
+The user must log in again after promotion for the new role to appear in their JWT (token role is captured at login time).
 
 ### Known limitations
 
 - Engine uses `float64`; tracked as tech debt per `matching.md`
 - In-memory market data and order book lost on crash; rehydrated from DB on next start
+- Marketfeed snapshots lost on restart; Binance re-emits within seconds
 - Outbox events never expire — operator must archive old PROCESSED rows
 - No automatic retry on settlement failure — alert-only
+- JWT has no refresh token; clients must re-login after 24h
+- Withdrawals deduct instantly; no PROCESSING state or 2FA in MVP
+- Admin promotion is via raw SQL (no UI yet)
 - Single-instance only — no distributed engine or multi-replica outbox publisher
 
 ### Logging
