@@ -15,6 +15,8 @@ type Config struct {
 	DBMaxConns         int
 	OutboxPollInterval time.Duration
 	JWTSecret          string
+	BinanceSymbols     []string
+	MarketfeedEnabled  bool
 }
 
 func Load() (*Config, error) {
@@ -44,6 +46,28 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("JWT_SECRET is required and must be at least 32 characters (got %d)", len(jwtSecret))
 	}
 
+	symbolsRaw := v.GetString("BINANCE_SYMBOLS")
+	if symbolsRaw == "" {
+		symbolsRaw = v.GetString("binance.symbols")
+	}
+	if symbolsRaw == "" {
+		symbolsRaw = "BTC-USDT,ETH-USDT,SOL-USDT"
+	}
+	symbols := []string{}
+	for _, s := range strings.Split(symbolsRaw, ",") {
+		s = strings.TrimSpace(s)
+		if s != "" {
+			symbols = append(symbols, s)
+		}
+	}
+
+	mfEnabled := true
+	if v.IsSet("MARKETFEED_ENABLED") {
+		mfEnabled = v.GetBool("MARKETFEED_ENABLED")
+	} else if v.IsSet("marketfeed.enabled") {
+		mfEnabled = v.GetBool("marketfeed.enabled")
+	}
+
 	return &Config{
 		DatabaseURL:        dbURL,
 		ServerPort:         v.GetString("server.port"),
@@ -51,5 +75,7 @@ func Load() (*Config, error) {
 		DBMaxConns:         v.GetInt("db.max_conns"),
 		OutboxPollInterval: time.Duration(v.GetInt("outbox.poll_interval_seconds")) * time.Second,
 		JWTSecret:          jwtSecret,
+		BinanceSymbols:     symbols,
+		MarketfeedEnabled:  mfEnabled,
 	}, nil
 }

@@ -19,15 +19,19 @@ import (
 	"mynance/config"
 	"mynance/internal/account"
 	"mynance/internal/auth"
+	"mynance/internal/deposit"
 	"mynance/internal/engine"
 	"mynance/internal/eventbus"
 	"mynance/internal/idempotency"
 	"mynance/internal/ledger"
 	"mynance/internal/marketdata"
+	"mynance/internal/marketfeed"
 	"mynance/internal/order"
 	"mynance/internal/outbox"
 	"mynance/internal/trade"
 	"mynance/internal/user"
+	"mynance/internal/wallet"
+	"mynance/internal/withdrawal"
 )
 
 func main() {
@@ -126,6 +130,21 @@ func run() error {
 	// Auth
 	signer := auth.NewSigner(cfg.JWTSecret)
 
+	// Binance marketfeed
+	mfClient := marketfeed.NewClient(cfg.BinanceSymbols, cfg.MarketfeedEnabled)
+	mfHandler := marketfeed.NewHandler(mfClient)
+
+	// Wallet + deposit + withdrawal
+	walletStore := wallet.NewStore(pool)
+	depositStore := deposit.NewStore(pool)
+	withdrawalStore := withdrawal.NewStore(pool)
+	walletSvc := wallet.NewService(pool, walletStore, accountSvc)
+	depositSvc := deposit.NewService(pool, depositStore, walletSvc, ledgerStore, outboxStore, accountSvc)
+	withdrawalSvc := withdrawal.NewService(pool, withdrawalStore, idempotencyStore, ledgerStore, outboxStore, accountSvc)
+	walletHandler := wallet.NewHandler(walletSvc)
+	depositHandler := deposit.NewHandler(depositSvc)
+	withdrawalHandler := withdrawal.NewHandler(withdrawalSvc)
+
 	// Handlers
 	userHandler := user.NewHandler(userSvc, signer)
 	accountHandler := account.NewHandler(accountSvc)
@@ -157,6 +176,7 @@ func run() error {
 	r.Post("/users", userHandler.CreateUser)
 	r.Mount("/orderbook", mdHandler.OrderBookRoutes())
 	r.Mount("/marketdata/trades", mdHandler.TradesRoutes())
+	r.Mount("/markets", mfHandler.Routes())
 
 	// Protected routes
 	r.Group(func(pr chi.Router) {
@@ -168,8 +188,16 @@ func run() error {
 		pr.Get("/users/{userID}/orders", orderHandler.ListByUser)
 		pr.Get("/users/{userID}/trades", tradeHandler.ListByUser)
 		pr.Mount("/accounts", accountHandler.Routes())
+		pr.Post("/accounts/{id}/withdraw", withdrawalHandler.Withdraw)
 		pr.Mount("/orders", orderHandler.Routes())
 		pr.Mount("/trades", tradeHandler.Routes())
+		pr.Mount("/wallets", walletHandler.Routes())
+		pr.Mount("/deposits", depositHandler.UserRoutes())
+
+		pr.Group(func(ar chi.Router) {
+			ar.Use(auth.RequireAdmin)
+			ar.Mount("/admin/deposits", depositHandler.AdminRoutes())
+		})
 	})
 
 	port := cfg.ServerPort
@@ -203,6 +231,12 @@ func run() error {
 		close(engineDone)
 	}()
 
+	marketfeedDone := make(chan struct{})
+	go func() {
+		mfClient.Start(workerCtx)
+		close(marketfeedDone)
+	}()
+
 	go func() {
 		slog.Info("server starting", "port", port)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -224,6 +258,7 @@ func run() error {
 	cancelWorkers()
 	<-engineDone
 	<-outboxDone
+	<-marketfeedDone
 	slog.Info("server stopped")
 	return nil
 }

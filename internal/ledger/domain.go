@@ -10,16 +10,20 @@ import (
 type EntryType string
 
 const (
-	EntryTypeReserve EntryType = "RESERVE"
-	EntryTypeRelease EntryType = "RELEASE"
-	EntryTypeTrade   EntryType = "TRADE"
+	EntryTypeReserve  EntryType = "RESERVE"
+	EntryTypeRelease  EntryType = "RELEASE"
+	EntryTypeTrade    EntryType = "TRADE"
+	EntryTypeDeposit  EntryType = "DEPOSIT"
+	EntryTypeWithdraw EntryType = "WITHDRAW"
 )
 
 type RefType string
 
 const (
-	RefTypeOrder RefType = "ORDER"
-	RefTypeTrade RefType = "TRADE"
+	RefTypeOrder    RefType = "ORDER"
+	RefTypeTrade    RefType = "TRADE"
+	RefTypeDeposit  RefType = "DEPOSIT"
+	RefTypeWithdraw RefType = "WITHDRAW"
 )
 
 type LedgerEntry struct {

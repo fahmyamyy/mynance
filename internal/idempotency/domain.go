@@ -9,8 +9,9 @@ import (
 type Scope string
 
 const (
-	ScopeOrder Scope = "ORDER"
-	ScopeTrade Scope = "TRADE"
+	ScopeOrder    Scope = "ORDER"
+	ScopeTrade    Scope = "TRADE"
+	ScopeWithdraw Scope = "WITHDRAW"
 )
 
 type IdempotencyKey struct {
