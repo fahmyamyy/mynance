@@ -2,6 +2,8 @@
 
 Backend reference: [README.md](./README.md). This doc covers everything an agent or human needs to design and build the Next.js frontend.
 
+**Visual reference:** Binance Spot UI for layout patterns (order book on left, place-order in middle, my-orders below). **Brand identity:** mint-green forward, futuristic, modern — not Binance's yellow-on-black aesthetic. Dark mode default. Tabular numerics throughout. Subtle ambient gradients, soft glow on focus, no heavy shadows.
+
 ---
 
 ## Tech stack
@@ -10,7 +12,9 @@ Backend reference: [README.md](./README.md). This doc covers everything an agent
 |---|---|---|
 | Framework | **Next.js 15** (App Router) | Server Components, RSC streaming, modern React 19 |
 | Auth | **Auth.js v5** (`next-auth@beta`) | Credentials provider wraps our `POST /login`; session JWT cookie holds backend token |
-| Styling | **Tailwind CSS + shadcn/ui** (Slate base, dark mode default) | Fast scaffold; semantic tokens for buy/sell/status |
+| Styling | **Tailwind CSS + shadcn/ui** (custom mint palette, dark default) | Fast scaffold; futuristic-modern via subtle gradients + glow; Binance-familiar layout |
+| Fonts | **Geist Sans + Geist Mono** | Modern geometric sans; mono for prices/addresses with `tabular-nums` |
+| Motion | **Framer Motion** | Animated price ticks, fade transitions; used sparingly |
 | Forms | **react-hook-form + zod** | Mirrors backend `validator/v10` constraints |
 | Data | **TanStack Query v5** | Polling, stale-while-revalidate, retry, optimistic updates |
 | Charts | **lightweight-charts** (TradingView OSS) | Candle/line; lighter than full Recharts for finance |
@@ -586,6 +590,70 @@ Skeletons match final shape (rows/cards), not generic spinners.
 
 ---
 
+## Design language
+
+### Visual reference: Binance, modernized
+
+The trade view layout mirrors Binance's spot UI — that's a deliberate familiarity bet (traders already know how to read it). Departures from Binance:
+
+- **Green-forward brand** instead of Binance's yellow-on-black. Calmer, more "fintech" than "casino".
+- **Futuristic + modern aesthetic** — subtle glass-morphism, soft neon accents on focus/hover, tabular-numeric font for prices, sharper card radii than the rounded "consumer SaaS" default
+- **Less visual noise** — Binance crams everything; we use whitespace + grouping to make scanning faster
+- **Animated price ticks** — last price flashes green on uptick, red on downtick, fades over ~600ms
+
+### Color philosophy
+
+| Token | Use | Hue |
+|---|---|---|
+| `--primary` (brand) | nav highlights, primary buttons, links, focus ring | **Mint green** (152° hue, more cyan-leaning) |
+| `--buy` | BUY side, positive change, bullish | **Trading green** (142° hue, standard) |
+| `--sell` | SELL side, negative change, bearish | Red (0° hue) |
+| `--accent` | hover, subtle background tints | mint @ low alpha |
+| `--background` | page bg | near-black with very subtle green tint |
+| `--card` | elevated surfaces | slightly lighter than bg, optional backdrop-blur |
+| `--muted` | secondary text, dividers | desaturated slate |
+| `--border` | borders, gridlines | low-opacity slate |
+| `--pending` / `--filled` / `--cancelled` | status pills | amber / blue / slate |
+
+Brand green ≠ buy green (intentional). Same family, different shades — brand is the cooler "mynance" identity; buy is the universal trading-green. This avoids ambiguity ("is that button buying or just primary?") while keeping the green vibe.
+
+### Typography
+
+- **Sans:** `Geist` (or `Inter` as fallback) — modern, geometric, great for UI
+- **Mono / numerics:** `Geist Mono` or `JetBrains Mono` for prices, addresses, order IDs
+- **Tabular numerics everywhere a price/qty appears:** `font-variant-numeric: tabular-nums` so digits align in tables and don't jitter on update
+
+```css
+.font-tabular { font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; }
+```
+
+### Density
+
+Exchange UIs are information-dense. Defaults:
+- Body text: 13-14px (shadcn default 14px is fine)
+- Table rows: compact (32-36px), not the default 48px
+- Card padding: tighter than shadcn default; 12-16px instead of 24px
+- Border radii: smaller than default — `--radius: 0.375rem` (6px) feels professional vs the 0.5rem (8px) default
+
+### Futuristic touches (subtle, not loud)
+
+- **Soft glow on focus** — primary mint at 30% alpha as a 1-2px outer glow on focused inputs and active tabs
+- **Glass cards** on the trade view side panels — `bg-card/70 backdrop-blur-md border-border/50`
+- **Gradient backgrounds** — extremely subtle radial gradient on body, from `hsl(var(--background))` to a 2% mint tint at the corners
+- **Animated number changes** — Framer Motion or `useAnimate` to flash the last-price cell. Don't over-animate elsewhere.
+- **Skeleton shimmer** — shadcn `Skeleton` defaults are fine; just ensure dark-mode contrast is right
+- **No drop shadows on cards** in dark mode — use borders instead. Shadows look dated; thin borders feel modern.
+
+### What to avoid
+
+- Yellow / gold accents (too Binance-derivative)
+- Heavy gradients on buttons (looks 2015)
+- Drop shadows everywhere (looks heavy)
+- Emoji icons (use lucide; tighter and consistent)
+- Pure black background (#000) — use the near-black `hsl(222.2 84% 4.9%)` for slightly warmer feel
+
+---
+
 ## shadcn/ui setup
 
 Initialize once:
@@ -605,35 +673,116 @@ npx shadcn@latest add button input label form card table tabs dialog \
   alert alert-dialog select tooltip popover scroll-area
 ```
 
-### Theming
+### Theming — mynance palette
 
-shadcn/ui uses CSS variables in `globals.css`. For an exchange aesthetic, override the chart colors and add semantic ones:
+Replace the shadcn defaults in `globals.css`. Brand mint, trading green/red, and semantic status colors.
 
 ```css
-:root {
-  --background: 0 0% 100%;
-  --foreground: 222.2 84% 4.9%;
-  /* ... defaults ... */
+@layer base {
+  :root {
+    /* Light mode — used rarely (toggle available, dark default) */
+    --background: 150 20% 98%;
+    --foreground: 222 47% 11%;
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 11%;
+    --primary: 152 76% 36%;            /* mint brand */
+    --primary-foreground: 0 0% 100%;
+    --secondary: 150 10% 96%;
+    --secondary-foreground: 222 47% 11%;
+    --muted: 150 8% 95%;
+    --muted-foreground: 215 16% 47%;
+    --accent: 152 76% 92%;
+    --accent-foreground: 152 76% 20%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 150 10% 90%;
+    --input: 150 10% 90%;
+    --ring: 152 76% 36%;
+    --radius: 0.375rem;
 
-  /* mynance-specific */
-  --buy: 142 71% 45%;          /* green */
-  --buy-foreground: 0 0% 100%;
-  --sell: 0 84% 60%;           /* red */
-  --sell-foreground: 0 0% 100%;
-  --pending: 38 92% 50%;       /* amber */
-  --filled: 217 91% 60%;       /* blue */
-  --cancelled: 215 16% 47%;    /* slate */
-}
+    /* mynance semantic */
+    --buy: 142 71% 45%;
+    --buy-foreground: 0 0% 100%;
+    --sell: 0 84% 60%;
+    --sell-foreground: 0 0% 100%;
+    --pending: 38 92% 50%;
+    --filled: 217 91% 60%;
+    --cancelled: 215 16% 47%;
+  }
 
-.dark {
-  --background: 222.2 84% 4.9%;
-  /* ... dark variants ... */
-  --buy: 142 71% 45%;
-  --sell: 0 84% 60%;
+  .dark {
+    /* Dark mode — default for the app */
+    --background: 222 47% 5%;          /* near-black with subtle warmth */
+    --foreground: 150 10% 96%;
+    --card: 222 40% 8%;
+    --card-foreground: 150 10% 96%;
+    --popover: 222 40% 8%;
+    --popover-foreground: 150 10% 96%;
+    --primary: 152 80% 50%;            /* mint, brighter in dark */
+    --primary-foreground: 222 47% 5%;
+    --secondary: 222 30% 12%;
+    --secondary-foreground: 150 10% 96%;
+    --muted: 222 30% 12%;
+    --muted-foreground: 215 20% 65%;
+    --accent: 152 60% 15%;
+    --accent-foreground: 152 80% 70%;
+    --destructive: 0 70% 50%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 222 30% 14%;
+    --input: 222 30% 14%;
+    --ring: 152 80% 50%;
+
+    /* mynance semantic — same in both modes for trading clarity */
+    --buy: 142 71% 45%;
+    --buy-foreground: 0 0% 100%;
+    --sell: 0 84% 60%;
+    --sell-foreground: 0 0% 100%;
+    --pending: 38 92% 50%;
+    --filled: 217 91% 60%;
+    --cancelled: 215 16% 47%;
+  }
+
+  body {
+    background: hsl(var(--background));
+    /* Subtle ambient gradient — futuristic without being loud */
+    background-image:
+      radial-gradient(ellipse at top left, hsl(var(--primary) / 0.03), transparent 50%),
+      radial-gradient(ellipse at bottom right, hsl(var(--primary) / 0.02), transparent 50%);
+    background-attachment: fixed;
+    font-feature-settings: "rlig" 1, "calt" 1;
+  }
+
+  /* Tabular numerics utility */
+  .tabular { font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; }
+
+  /* Mono for prices / addresses */
+  .mono { font-family: 'Geist Mono', 'JetBrains Mono', ui-monospace, monospace; }
 }
 ```
 
-Reference via Tailwind: `bg-buy text-buy-foreground` or `text-[hsl(var(--buy))]`.
+Add to `tailwind.config.ts` to expose the new tokens:
+
+```ts
+theme: {
+  extend: {
+    colors: {
+      buy: { DEFAULT: 'hsl(var(--buy))', foreground: 'hsl(var(--buy-foreground))' },
+      sell: { DEFAULT: 'hsl(var(--sell))', foreground: 'hsl(var(--sell-foreground))' },
+      pending: 'hsl(var(--pending))',
+      filled: 'hsl(var(--filled))',
+      cancelled: 'hsl(var(--cancelled))',
+    },
+    fontFamily: {
+      sans: ['Geist', 'Inter', 'system-ui', 'sans-serif'],
+      mono: ['Geist Mono', 'JetBrains Mono', 'ui-monospace', 'monospace'],
+    },
+  },
+}
+```
+
+Reference in components: `bg-buy text-buy-foreground`, `text-primary`, `font-mono tabular`, `bg-card/70 backdrop-blur-md`.
 
 ### Dark mode default
 
@@ -641,9 +790,79 @@ Exchanges live in dark mode. Set in `app/layout.tsx`:
 
 ```tsx
 <html lang="en" className="dark" suppressHydrationWarning>
+  <body className="min-h-screen font-sans antialiased">
 ```
 
-Add `next-themes` + `<ThemeProvider>` later if you want a toggle.
+Optional toggle via `next-themes` later. Don't ship a light-mode-first product — exchange users expect dark.
+
+### Fonts
+
+Install Geist via the official Next.js helper (zero-config self-hosting):
+
+```tsx
+// app/layout.tsx
+import { GeistSans } from 'geist/font/sans'
+import { GeistMono } from 'geist/font/mono'
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <html lang="en" className={`dark ${GeistSans.variable} ${GeistMono.variable}`} suppressHydrationWarning>
+      <body className="min-h-screen font-sans antialiased">{children}</body>
+    </html>
+  )
+}
+```
+
+In `globals.css`:
+
+```css
+@layer base {
+  :root { --font-sans: var(--font-geist-sans); --font-mono: var(--font-geist-mono); }
+}
+```
+
+### Animated price ticks
+
+Last-price cell flashes green/red on change. Minimal Framer Motion:
+
+```tsx
+'use client'
+import { motion, AnimatePresence } from 'framer-motion'
+import { useEffect, useRef, useState } from 'react'
+import { cn } from '@/lib/utils'
+
+export function PriceTick({ value }: { value: string }) {
+  const prev = useRef(value)
+  const [direction, setDirection] = useState<'up' | 'down' | null>(null)
+
+  useEffect(() => {
+    if (value !== prev.current) {
+      setDirection(Number(value) > Number(prev.current) ? 'up' : 'down')
+      prev.current = value
+      const t = setTimeout(() => setDirection(null), 600)
+      return () => clearTimeout(t)
+    }
+  }, [value])
+
+  return (
+    <motion.span
+      key={value}
+      animate={{
+        backgroundColor:
+          direction === 'up'   ? 'hsl(var(--buy) / 0.20)' :
+          direction === 'down' ? 'hsl(var(--sell) / 0.20)' :
+          'transparent',
+      }}
+      transition={{ duration: 0.6 }}
+      className={cn('font-mono tabular rounded px-1', direction === 'up' && 'text-buy', direction === 'down' && 'text-sell')}
+    >
+      {value}
+    </motion.span>
+  )
+}
+```
+
+For prices safe to compare numerically (Binance ticker shows max ~10 digits before decimal), `Number()` is acceptable for the direction check; the **displayed value remains a string** to preserve precision.
 
 ---
 
@@ -779,13 +998,14 @@ const { data: symbols } = useQuery({
 
 These are downstream choices for the design phase:
 
-- Brand / visual identity (logo, color tokens, typography scale)
-- Light-mode vs dark-default
-- Mobile-first vs desktop-first layout
+- Logo / wordmark (mint + monospace logotype suggested but not designed)
+- Mobile-first vs desktop-first layout (recommend desktop-first; mobile trade view is genuinely hard)
 - Onboarding tour / empty-state CTAs
 - Settings page (notification prefs, etc.)
 - Internationalization (likely English-only MVP)
-- Accessibility audit (target WCAG AA)
+- Accessibility audit (target WCAG AA — mint primary at 152° 80% 50% should pass against the dark bg; verify with axe)
+- Specific Framer Motion choreography beyond price ticks
+- Chart library tuning (lightweight-charts color scheme alignment)
 
 ---
 
