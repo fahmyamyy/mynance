@@ -14,19 +14,19 @@ import (
 	"mynance/pkg/validate"
 )
 
-type TradeHandler struct {
+type Handler struct {
 	tradeService Service
 }
 
 func NewHandler(
 	tradeService Service,
-) *TradeHandler {
-	return &TradeHandler{
+) *Handler {
+	return &Handler{
 		tradeService: tradeService,
 	}
 }
 
-func (handler *TradeHandler) Routes() chi.Router {
+func (handler *Handler) Routes() chi.Router {
 	r := chi.NewRouter()
 	r.Post("/", handler.ExecuteTrade)
 	return r
@@ -74,7 +74,7 @@ func ToTradeResponse(t *Trade) TradeResponse {
 	return resp
 }
 
-func (handler *TradeHandler) ExecuteTrade(w http.ResponseWriter, r *http.Request) {
+func (handler *Handler) ExecuteTrade(w http.ResponseWriter, r *http.Request) {
 	var req ExecuteTradeRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		shared.HTTPError(w, http.StatusBadRequest, "invalid request body")

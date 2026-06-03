@@ -12,19 +12,19 @@ import (
 	"mynance/pkg/validate"
 )
 
-type AccountHandler struct {
+type Handler struct {
 	accountService Service
 }
 
 func NewHandler(
 	accountService Service,
-) *AccountHandler {
-	return &AccountHandler{
+) *Handler {
+	return &Handler{
 		accountService: accountService,
 	}
 }
 
-func (handler *AccountHandler) Routes() chi.Router {
+func (handler *Handler) Routes() chi.Router {
 	r := chi.NewRouter()
 	r.Post("/", handler.CreateAccount)
 	r.Get("/", handler.ListAccounts)
@@ -67,7 +67,7 @@ func ToAccountResponse(acct *Account) AccountResponse {
 	}
 }
 
-func (handler *AccountHandler) CreateAccount(w http.ResponseWriter, r *http.Request) {
+func (handler *Handler) CreateAccount(w http.ResponseWriter, r *http.Request) {
 	var req CreateAccountRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		shared.HTTPError(w, http.StatusBadRequest, "invalid request body")
@@ -93,7 +93,7 @@ func (handler *AccountHandler) CreateAccount(w http.ResponseWriter, r *http.Requ
 	shared.WriteJSON(w, http.StatusCreated, ToAccountResponse(acct))
 }
 
-func (handler *AccountHandler) GetAccount(w http.ResponseWriter, r *http.Request) {
+func (handler *Handler) GetAccount(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		shared.HTTPError(w, http.StatusBadRequest, "invalid account id")
@@ -109,7 +109,7 @@ func (handler *AccountHandler) GetAccount(w http.ResponseWriter, r *http.Request
 	shared.WriteJSON(w, http.StatusOK, ToAccountResponse(acct))
 }
 
-func (handler *AccountHandler) ListAccounts(w http.ResponseWriter, r *http.Request) {
+func (handler *Handler) ListAccounts(w http.ResponseWriter, r *http.Request) {
 	limit, offset := shared.ParsePagination(r)
 
 	var userID *uuid.UUID
@@ -135,7 +135,7 @@ func (handler *AccountHandler) ListAccounts(w http.ResponseWriter, r *http.Reque
 	shared.WriteJSON(w, http.StatusOK, resp)
 }
 
-func (handler *AccountHandler) DeleteAccount(w http.ResponseWriter, r *http.Request) {
+func (handler *Handler) DeleteAccount(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		shared.HTTPError(w, http.StatusBadRequest, "invalid account id")
@@ -150,7 +150,7 @@ func (handler *AccountHandler) DeleteAccount(w http.ResponseWriter, r *http.Requ
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (handler *AccountHandler) GetBalance(w http.ResponseWriter, r *http.Request) {
+func (handler *Handler) GetBalance(w http.ResponseWriter, r *http.Request) {
 	accountID, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		shared.HTTPError(w, http.StatusBadRequest, "invalid account id")

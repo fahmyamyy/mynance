@@ -14,19 +14,19 @@ import (
 	"mynance/pkg/validate"
 )
 
-type OrderHandler struct {
+type Handler struct {
 	orderService Service
 }
 
 func NewHandler(
 	orderService Service,
-) *OrderHandler {
-	return &OrderHandler{
+) *Handler {
+	return &Handler{
 		orderService: orderService,
 	}
 }
 
-func (handler *OrderHandler) Routes() chi.Router {
+func (handler *Handler) Routes() chi.Router {
 	r := chi.NewRouter()
 	r.Post("/", handler.PlaceOrder)
 	r.Get("/{id}", handler.GetOrder)
@@ -80,7 +80,7 @@ func ToOrderResponse(o *Order) OrderResponse {
 	return resp
 }
 
-func (handler *OrderHandler) PlaceOrder(w http.ResponseWriter, r *http.Request) {
+func (handler *Handler) PlaceOrder(w http.ResponseWriter, r *http.Request) {
 	var req PlaceOrderRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		shared.HTTPError(w, http.StatusBadRequest, "invalid request body")
@@ -125,7 +125,7 @@ func (handler *OrderHandler) PlaceOrder(w http.ResponseWriter, r *http.Request) 
 	shared.WriteJSON(w, http.StatusCreated, ToOrderResponse(o))
 }
 
-func (handler *OrderHandler) GetOrder(w http.ResponseWriter, r *http.Request) {
+func (handler *Handler) GetOrder(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		shared.HTTPError(w, http.StatusBadRequest, "invalid order id")
@@ -139,7 +139,7 @@ func (handler *OrderHandler) GetOrder(w http.ResponseWriter, r *http.Request) {
 	shared.WriteJSON(w, http.StatusOK, ToOrderResponse(o))
 }
 
-func (handler *OrderHandler) CancelOrder(w http.ResponseWriter, r *http.Request) {
+func (handler *Handler) CancelOrder(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		shared.HTTPError(w, http.StatusBadRequest, "invalid order id")
@@ -153,7 +153,7 @@ func (handler *OrderHandler) CancelOrder(w http.ResponseWriter, r *http.Request)
 	shared.WriteJSON(w, http.StatusOK, ToOrderResponse(o))
 }
 
-func (handler *OrderHandler) ListByUser(w http.ResponseWriter, r *http.Request) {
+func (handler *Handler) ListByUser(w http.ResponseWriter, r *http.Request) {
 	userID, err := uuid.Parse(chi.URLParam(r, "userID"))
 	if err != nil {
 		shared.HTTPError(w, http.StatusBadRequest, "invalid user id")

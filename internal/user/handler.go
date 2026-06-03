@@ -12,19 +12,19 @@ import (
 	"mynance/pkg/validate"
 )
 
-type UserHandler struct {
+type Handler struct {
 	userService Service
 }
 
 func NewHandler(
 	userService Service,
-) *UserHandler {
-	return &UserHandler{
+) *Handler {
+	return &Handler{
 		userService: userService,
 	}
 }
 
-func (handler *UserHandler) Routes() chi.Router {
+func (handler *Handler) Routes() chi.Router {
 	r := chi.NewRouter()
 	r.Post("/", handler.CreateUser)
 	r.Get("/", handler.ListUsers)
@@ -73,7 +73,7 @@ func ToUserResponse(u *User) UserResponse {
 	}
 }
 
-func (handler *UserHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
+func (handler *Handler) CreateUser(w http.ResponseWriter, r *http.Request) {
 	var req CreateUserRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		shared.HTTPError(w, http.StatusBadRequest, "invalid request body")
@@ -98,7 +98,7 @@ func (handler *UserHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 	shared.WriteJSON(w, http.StatusCreated, ToUserResponse(u))
 }
 
-func (handler *UserHandler) GetUser(w http.ResponseWriter, r *http.Request) {
+func (handler *Handler) GetUser(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		shared.HTTPError(w, http.StatusBadRequest, "invalid user id")
@@ -114,7 +114,7 @@ func (handler *UserHandler) GetUser(w http.ResponseWriter, r *http.Request) {
 	shared.WriteJSON(w, http.StatusOK, ToUserResponse(u))
 }
 
-func (handler *UserHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
+func (handler *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 	limit, offset := shared.ParsePagination(r)
 
 	users, err := handler.userService.ListUsers(r.Context(), limit, offset)
@@ -130,7 +130,7 @@ func (handler *UserHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
 	shared.WriteJSON(w, http.StatusOK, resp)
 }
 
-func (handler *UserHandler) DeleteUser(w http.ResponseWriter, r *http.Request) {
+func (handler *Handler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		shared.HTTPError(w, http.StatusBadRequest, "invalid user id")
