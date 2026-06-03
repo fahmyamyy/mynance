@@ -21,6 +21,10 @@ func (s *stubTradeService) ExecuteTrade(ctx context.Context, cmd trade.ExecuteTr
 	return &trade.Trade{}, nil
 }
 
+func (s *stubTradeService) ListByUser(ctx context.Context, userID uuid.UUID, limit, offset int) ([]*trade.UserTrade, error) {
+	return nil, nil
+}
+
 func TestSettlement_OnTradeMatched_CallsExecuteTrade(t *testing.T) {
 	stub := &stubTradeService{}
 	sub := NewSettlementSubscriber(stub)

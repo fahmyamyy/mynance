@@ -2,11 +2,13 @@ package user
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"mynance/internal/shared"
 	"mynance/pkg/crypto"
 	"mynance/pkg/timeutil"
 )
@@ -23,6 +25,7 @@ type Service interface {
 	GetUser(ctx context.Context, id uuid.UUID) (*User, error)
 	ListUsers(ctx context.Context, limit, offset int) ([]*User, error)
 	DeleteUser(ctx context.Context, id uuid.UUID) error
+	Login(ctx context.Context, email, password string) (*User, error)
 }
 
 type userService struct {
@@ -91,6 +94,20 @@ func (s *userService) ListUsers(ctx context.Context, limit, offset int) ([]*User
 		return nil, fmt.Errorf("ListUsers: %w", err)
 	}
 	return users, nil
+}
+
+func (s *userService) Login(ctx context.Context, email, password string) (*User, error) {
+	u, err := s.store.GetByEmail(ctx, email)
+	if err != nil {
+		if errors.Is(err, shared.ErrNotFound) {
+			return nil, shared.ErrUnauthorized
+		}
+		return nil, fmt.Errorf("Login lookup: %w", err)
+	}
+	if !crypto.CheckPassword(password, u.PasswordHash) {
+		return nil, shared.ErrUnauthorized
+	}
+	return u, nil
 }
 
 func (s *userService) DeleteUser(ctx context.Context, id uuid.UUID) error {

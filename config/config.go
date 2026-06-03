@@ -14,6 +14,7 @@ type Config struct {
 	LogLevel           string
 	DBMaxConns         int
 	OutboxPollInterval time.Duration
+	JWTSecret          string
 }
 
 func Load() (*Config, error) {
@@ -35,11 +36,20 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("database URL is required: set DATABASE_URL env var or database.url in application.yaml")
 	}
 
+	jwtSecret := v.GetString("JWT_SECRET")
+	if jwtSecret == "" {
+		jwtSecret = v.GetString("jwt.secret")
+	}
+	if len(jwtSecret) < 32 {
+		return nil, fmt.Errorf("JWT_SECRET is required and must be at least 32 characters (got %d)", len(jwtSecret))
+	}
+
 	return &Config{
 		DatabaseURL:        dbURL,
 		ServerPort:         v.GetString("server.port"),
 		LogLevel:           v.GetString("log.level"),
 		DBMaxConns:         v.GetInt("db.max_conns"),
 		OutboxPollInterval: time.Duration(v.GetInt("outbox.poll_interval_seconds")) * time.Second,
+		JWTSecret:          jwtSecret,
 	}, nil
 }

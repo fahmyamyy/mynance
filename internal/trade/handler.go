@@ -1,6 +1,7 @@
 package trade
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -9,10 +10,73 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"mynance/internal/auth"
 	"mynance/internal/shared"
 	"mynance/pkg/numeric"
 	"mynance/pkg/validate"
 )
+
+func ensureTradeOwner(ctx context.Context, userID uuid.UUID) error {
+	if auth.IsAdmin(ctx) {
+		return nil
+	}
+	uid, err := auth.UserIDFromContext(ctx)
+	if err != nil {
+		return shared.ErrUnauthorized
+	}
+	if uid != userID {
+		return shared.ErrForbidden
+	}
+	return nil
+}
+
+type UserTradeResponse struct {
+	ID                 string `json:"id"`
+	Symbol             string `json:"symbol"`
+	Side               string `json:"side"`
+	Price              string `json:"price"`
+	Quantity           string `json:"quantity"`
+	CounterpartyUserID string `json:"counterparty_user_id"`
+	CreatedAt          string `json:"created_at"`
+}
+
+func toUserTradeResponse(t *UserTrade) UserTradeResponse {
+	resp := UserTradeResponse{
+		ID:                 t.ID.String(),
+		Symbol:             t.Symbol,
+		Side:               t.Side,
+		Price:              numeric.String(t.Price),
+		Quantity:           numeric.String(t.Quantity),
+		CounterpartyUserID: t.CounterpartyUserID.String(),
+	}
+	if t.CreatedAt != nil {
+		resp.CreatedAt = t.CreatedAt.Format(time.RFC3339)
+	}
+	return resp
+}
+
+func (handler *Handler) ListByUser(w http.ResponseWriter, r *http.Request) {
+	userID, err := uuid.Parse(chi.URLParam(r, "userID"))
+	if err != nil {
+		shared.HTTPError(w, http.StatusBadRequest, "invalid user id")
+		return
+	}
+	if err := ensureTradeOwner(r.Context(), userID); err != nil {
+		shared.HandleServiceError(w, err)
+		return
+	}
+	limit, offset := shared.ParsePagination(r)
+	trades, err := handler.tradeService.ListByUser(r.Context(), userID, limit, offset)
+	if err != nil {
+		shared.HandleServiceError(w, err)
+		return
+	}
+	resp := make([]UserTradeResponse, 0, len(trades))
+	for _, t := range trades {
+		resp = append(resp, toUserTradeResponse(t))
+	}
+	shared.WriteJSON(w, http.StatusOK, resp)
+}
 
 type Handler struct {
 	tradeService Service

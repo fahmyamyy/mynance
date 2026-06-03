@@ -4,12 +4,14 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type Store interface {
 	Create(ctx context.Context, tx pgx.Tx, trade *Trade) error
+	ListByUser(ctx context.Context, userID uuid.UUID, limit, offset int) ([]*UserTrade, error)
 }
 
 type pgxStore struct {
@@ -22,6 +24,33 @@ func NewStore(
 	return &pgxStore{
 		db: db,
 	}
+}
+
+func (r *pgxStore) ListByUser(ctx context.Context, userID uuid.UUID, limit, offset int) ([]*UserTrade, error) {
+	rows, err := r.db.Query(ctx,
+		`SELECT id, symbol,
+		        CASE WHEN buy_user_id = $1 THEN 'BUY' ELSE 'SELL' END AS side,
+		        price, quantity,
+		        CASE WHEN buy_user_id = $1 THEN sell_user_id ELSE buy_user_id END AS counterparty,
+		        created_at
+		 FROM trades
+		 WHERE buy_user_id = $1 OR sell_user_id = $1
+		 ORDER BY created_at DESC LIMIT $2 OFFSET $3`,
+		userID, limit, offset,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("tradeStore.ListByUser: %w", err)
+	}
+	defer rows.Close()
+	var out []*UserTrade
+	for rows.Next() {
+		t := &UserTrade{}
+		if err := rows.Scan(&t.ID, &t.Symbol, &t.Side, &t.Price, &t.Quantity, &t.CounterpartyUserID, &t.CreatedAt); err != nil {
+			return nil, fmt.Errorf("tradeStore.ListByUser scan: %w", err)
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
 }
 
 func (r *pgxStore) Create(ctx context.Context, tx pgx.Tx, t *Trade) error {

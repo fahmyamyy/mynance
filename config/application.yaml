@@ -12,3 +12,7 @@ db:
 
 outbox:
   poll_interval_seconds: 1
+
+# JWT_SECRET must be >= 32 chars. Override via env var in production.
+jwt:
+  secret: "dev-only-secret-change-in-prod-32!"

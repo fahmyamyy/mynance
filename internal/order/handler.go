@@ -1,6 +1,7 @@
 package order
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"mynance/internal/auth"
 	"mynance/internal/shared"
 	"mynance/pkg/numeric"
 	"mynance/pkg/validate"
@@ -35,7 +37,6 @@ func (handler *Handler) Routes() chi.Router {
 }
 
 type PlaceOrderRequest struct {
-	UserID         string `json:"user_id" validate:"required,uuid"`
 	Symbol         string `json:"symbol" validate:"required,max=20"`
 	Side           string `json:"side" validate:"required,oneof=BUY SELL"`
 	Price          string `json:"price" validate:"required"`
@@ -90,9 +91,9 @@ func (handler *Handler) PlaceOrder(w http.ResponseWriter, r *http.Request) {
 		shared.HTTPError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	userID, err := uuid.Parse(req.UserID)
+	userID, err := auth.UserIDFromContext(r.Context())
 	if err != nil {
-		shared.HTTPError(w, http.StatusBadRequest, "invalid user_id")
+		shared.HTTPError(w, http.StatusUnauthorized, "unauthenticated")
 		return
 	}
 	price, err := numeric.Parse(req.Price)
@@ -136,6 +137,10 @@ func (handler *Handler) GetOrder(w http.ResponseWriter, r *http.Request) {
 		shared.HandleServiceError(w, err)
 		return
 	}
+	if err := ensureOwner(r.Context(), o.UserID); err != nil {
+		shared.HandleServiceError(w, err)
+		return
+	}
 	shared.WriteJSON(w, http.StatusOK, ToOrderResponse(o))
 }
 
@@ -143,6 +148,15 @@ func (handler *Handler) CancelOrder(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		shared.HTTPError(w, http.StatusBadRequest, "invalid order id")
+		return
+	}
+	existing, err := handler.orderService.GetOrder(r.Context(), id)
+	if err != nil {
+		shared.HandleServiceError(w, err)
+		return
+	}
+	if err := ensureOwner(r.Context(), existing.UserID); err != nil {
+		shared.HandleServiceError(w, err)
 		return
 	}
 	o, err := handler.orderService.CancelOrder(r.Context(), id)
@@ -153,10 +167,28 @@ func (handler *Handler) CancelOrder(w http.ResponseWriter, r *http.Request) {
 	shared.WriteJSON(w, http.StatusOK, ToOrderResponse(o))
 }
 
+func ensureOwner(ctx context.Context, ownerID uuid.UUID) error {
+	if auth.IsAdmin(ctx) {
+		return nil
+	}
+	uid, err := auth.UserIDFromContext(ctx)
+	if err != nil {
+		return shared.ErrUnauthorized
+	}
+	if uid != ownerID {
+		return shared.ErrForbidden
+	}
+	return nil
+}
+
 func (handler *Handler) ListByUser(w http.ResponseWriter, r *http.Request) {
 	userID, err := uuid.Parse(chi.URLParam(r, "userID"))
 	if err != nil {
 		shared.HTTPError(w, http.StatusBadRequest, "invalid user id")
+		return
+	}
+	if err := ensureOwner(r.Context(), userID); err != nil {
+		shared.HandleServiceError(w, err)
 		return
 	}
 	limit, offset := shared.ParsePagination(r)

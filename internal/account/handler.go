@@ -1,6 +1,7 @@
 package account
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"time"
@@ -8,9 +9,24 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"mynance/internal/auth"
 	"mynance/internal/shared"
 	"mynance/pkg/validate"
 )
+
+func ensureAccountOwner(ctx context.Context, ownerID uuid.UUID) error {
+	if auth.IsAdmin(ctx) {
+		return nil
+	}
+	uid, err := auth.UserIDFromContext(ctx)
+	if err != nil {
+		return shared.ErrUnauthorized
+	}
+	if uid != ownerID {
+		return shared.ErrForbidden
+	}
+	return nil
+}
 
 type Handler struct {
 	accountService Service
@@ -35,8 +51,7 @@ func (handler *Handler) Routes() chi.Router {
 }
 
 type CreateAccountRequest struct {
-	UserID string `json:"user_id" validate:"required,uuid"`
-	Asset  string `json:"asset" validate:"required,max=20"`
+	Asset string `json:"asset" validate:"required,max=20"`
 }
 
 func (r CreateAccountRequest) Validate() error {
@@ -78,9 +93,9 @@ func (handler *Handler) CreateAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userID, err := uuid.Parse(req.UserID)
+	userID, err := auth.UserIDFromContext(r.Context())
 	if err != nil {
-		shared.HTTPError(w, http.StatusBadRequest, "invalid user_id")
+		shared.HTTPError(w, http.StatusUnauthorized, "unauthenticated")
 		return
 	}
 
@@ -105,6 +120,10 @@ func (handler *Handler) GetAccount(w http.ResponseWriter, r *http.Request) {
 		shared.HandleServiceError(w, err)
 		return
 	}
+	if err := ensureAccountOwner(r.Context(), acct.UserID); err != nil {
+		shared.HandleServiceError(w, err)
+		return
+	}
 
 	shared.WriteJSON(w, http.StatusOK, ToAccountResponse(acct))
 }
@@ -113,13 +132,22 @@ func (handler *Handler) ListAccounts(w http.ResponseWriter, r *http.Request) {
 	limit, offset := shared.ParsePagination(r)
 
 	var userID *uuid.UUID
-	if raw := r.URL.Query().Get("user_id"); raw != "" {
-		parsed, err := uuid.Parse(raw)
+	if auth.IsAdmin(r.Context()) {
+		if raw := r.URL.Query().Get("user_id"); raw != "" {
+			parsed, err := uuid.Parse(raw)
+			if err != nil {
+				shared.HTTPError(w, http.StatusBadRequest, "invalid user_id")
+				return
+			}
+			userID = &parsed
+		}
+	} else {
+		uid, err := auth.UserIDFromContext(r.Context())
 		if err != nil {
-			shared.HTTPError(w, http.StatusBadRequest, "invalid user_id")
+			shared.HTTPError(w, http.StatusUnauthorized, "unauthenticated")
 			return
 		}
-		userID = &parsed
+		userID = &uid
 	}
 
 	accounts, err := handler.accountService.ListAccounts(r.Context(), userID, limit, offset)
@@ -142,6 +170,16 @@ func (handler *Handler) DeleteAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	acct, err := handler.accountService.GetAccount(r.Context(), id)
+	if err != nil {
+		shared.HandleServiceError(w, err)
+		return
+	}
+	if err := ensureAccountOwner(r.Context(), acct.UserID); err != nil {
+		shared.HandleServiceError(w, err)
+		return
+	}
+
 	if err := handler.accountService.DeleteAccount(r.Context(), id); err != nil {
 		shared.HandleServiceError(w, err)
 		return
@@ -159,6 +197,10 @@ func (handler *Handler) GetBalance(w http.ResponseWriter, r *http.Request) {
 
 	acct, err := handler.accountService.GetAccountByID(r.Context(), accountID)
 	if err != nil {
+		shared.HandleServiceError(w, err)
+		return
+	}
+	if err := ensureAccountOwner(r.Context(), acct.UserID); err != nil {
 		shared.HandleServiceError(w, err)
 		return
 	}

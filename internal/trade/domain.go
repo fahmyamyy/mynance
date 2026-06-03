@@ -22,3 +22,13 @@ type Trade struct {
 func NewID() (uuid.UUID, error) {
 	return uuid.NewV7()
 }
+
+type UserTrade struct {
+	ID                 uuid.UUID
+	Symbol             string
+	Side               string
+	Price              pgtype.Numeric
+	Quantity           pgtype.Numeric
+	CounterpartyUserID uuid.UUID
+	CreatedAt          *time.Time
+}

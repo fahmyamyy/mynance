@@ -16,6 +16,7 @@ import (
 type Store interface {
 	Create(ctx context.Context, tx pgx.Tx, user *User) error
 	GetByID(ctx context.Context, id uuid.UUID) (*User, error)
+	GetByEmail(ctx context.Context, email string) (*User, error)
 	List(ctx context.Context, limit, offset int) ([]*User, error)
 	Delete(ctx context.Context, tx pgx.Tx, id uuid.UUID) error
 }
@@ -32,11 +33,27 @@ func NewStore(
 	}
 }
 
+const selectColumns = `id, email, username, full_name, password_hash, status, role, deleted_at, created_at, updated_at`
+
+func scanUser(scanner interface {
+	Scan(dest ...any) error
+}) (*User, error) {
+	u := &User{}
+	err := scanner.Scan(&u.ID, &u.Email, &u.Username, &u.FullName, &u.PasswordHash, &u.Status, &u.Role, &u.DeletedAt, &u.CreatedAt, &u.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return u, nil
+}
+
 func (r *pgxStore) Create(ctx context.Context, tx pgx.Tx, user *User) error {
+	if user.Role == "" {
+		user.Role = RoleUser
+	}
 	_, err := tx.Exec(ctx,
-		`INSERT INTO users (id, email, username, full_name, password_hash, status, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-		user.ID, user.Email, user.Username, user.FullName, user.PasswordHash, user.Status, user.CreatedAt, user.UpdatedAt,
+		`INSERT INTO users (id, email, username, full_name, password_hash, status, role, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+		user.ID, user.Email, user.Username, user.FullName, user.PasswordHash, user.Status, user.Role, user.CreatedAt, user.UpdatedAt,
 	)
 	if err != nil {
 		var pgErr *pgconn.PgError
@@ -49,12 +66,11 @@ func (r *pgxStore) Create(ctx context.Context, tx pgx.Tx, user *User) error {
 }
 
 func (r *pgxStore) GetByID(ctx context.Context, id uuid.UUID) (*User, error) {
-	u := &User{}
-	err := r.db.QueryRow(ctx,
-		`SELECT id, email, username, full_name, password_hash, status, deleted_at, created_at, updated_at
-		 FROM users WHERE id = $1 AND deleted_at IS NULL`,
+	row := r.db.QueryRow(ctx,
+		`SELECT `+selectColumns+` FROM users WHERE id = $1 AND deleted_at IS NULL`,
 		id,
-	).Scan(&u.ID, &u.Email, &u.Username, &u.FullName, &u.PasswordHash, &u.Status, &u.DeletedAt, &u.CreatedAt, &u.UpdatedAt)
+	)
+	u, err := scanUser(row)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, shared.ErrNotFound
@@ -64,10 +80,24 @@ func (r *pgxStore) GetByID(ctx context.Context, id uuid.UUID) (*User, error) {
 	return u, nil
 }
 
+func (r *pgxStore) GetByEmail(ctx context.Context, email string) (*User, error) {
+	row := r.db.QueryRow(ctx,
+		`SELECT `+selectColumns+` FROM users WHERE email = $1 AND deleted_at IS NULL`,
+		email,
+	)
+	u, err := scanUser(row)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, shared.ErrNotFound
+		}
+		return nil, fmt.Errorf("userStore.GetByEmail: %w", err)
+	}
+	return u, nil
+}
+
 func (r *pgxStore) List(ctx context.Context, limit, offset int) ([]*User, error) {
 	rows, err := r.db.Query(ctx,
-		`SELECT id, email, username, full_name, password_hash, status, deleted_at, created_at, updated_at
-		 FROM users WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT $1 OFFSET $2`,
+		`SELECT `+selectColumns+` FROM users WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT $1 OFFSET $2`,
 		limit, offset,
 	)
 	if err != nil {
@@ -77,8 +107,8 @@ func (r *pgxStore) List(ctx context.Context, limit, offset int) ([]*User, error)
 
 	var users []*User
 	for rows.Next() {
-		u := &User{}
-		if err := rows.Scan(&u.ID, &u.Email, &u.Username, &u.FullName, &u.PasswordHash, &u.Status, &u.DeletedAt, &u.CreatedAt, &u.UpdatedAt); err != nil {
+		u, err := scanUser(rows)
+		if err != nil {
 			return nil, fmt.Errorf("userStore.List scan: %w", err)
 		}
 		users = append(users, u)

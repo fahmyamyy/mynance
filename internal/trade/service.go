@@ -54,6 +54,7 @@ type ExecuteTradeCommand struct {
 
 type Service interface {
 	ExecuteTrade(ctx context.Context, cmd ExecuteTradeCommand) (*Trade, error)
+	ListByUser(ctx context.Context, userID uuid.UUID, limit, offset int) ([]*UserTrade, error)
 }
 
 type tradeService struct {
@@ -261,4 +262,12 @@ func tradeExecutedPayload(t *Trade) []byte {
 		"quantity":      numeric.String(t.Quantity),
 	})
 	return b
+}
+
+func (s *tradeService) ListByUser(ctx context.Context, userID uuid.UUID, limit, offset int) ([]*UserTrade, error) {
+	out, err := s.store.ListByUser(ctx, userID, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("ListByUser: %w", err)
+	}
+	return out, nil
 }

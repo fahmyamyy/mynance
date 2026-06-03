@@ -18,6 +18,7 @@ import (
 
 	"mynance/config"
 	"mynance/internal/account"
+	"mynance/internal/auth"
 	"mynance/internal/engine"
 	"mynance/internal/eventbus"
 	"mynance/internal/idempotency"
@@ -122,8 +123,11 @@ func run() error {
 		return fmt.Errorf("rehydrate engine: %w", err)
 	}
 
+	// Auth
+	signer := auth.NewSigner(cfg.JWTSecret)
+
 	// Handlers
-	userHandler := user.NewHandler(userSvc)
+	userHandler := user.NewHandler(userSvc, signer)
 	accountHandler := account.NewHandler(accountSvc)
 	orderHandler := order.NewHandler(orderSvc)
 	tradeHandler := trade.NewHandler(tradeSvc)
@@ -148,13 +152,25 @@ func run() error {
 		_, _ = w.Write([]byte("ok"))
 	})
 
-	r.Mount("/users", userHandler.Routes())
-	r.Mount("/accounts", accountHandler.Routes())
-	r.Mount("/orders", orderHandler.Routes())
-	r.Mount("/trades", tradeHandler.Routes())
+	// Public routes
+	r.Post("/login", userHandler.Login)
+	r.Post("/users", userHandler.CreateUser)
 	r.Mount("/orderbook", mdHandler.OrderBookRoutes())
 	r.Mount("/marketdata/trades", mdHandler.TradesRoutes())
-	r.Get("/users/{userID}/orders", orderHandler.ListByUser)
+
+	// Protected routes
+	r.Group(func(pr chi.Router) {
+		pr.Use(auth.Middleware(signer))
+		pr.Get("/me", userHandler.Me)
+		pr.Get("/users", userHandler.ListUsers)
+		pr.Get("/users/{id}", userHandler.GetUser)
+		pr.Delete("/users/{id}", userHandler.DeleteUser)
+		pr.Get("/users/{userID}/orders", orderHandler.ListByUser)
+		pr.Get("/users/{userID}/trades", tradeHandler.ListByUser)
+		pr.Mount("/accounts", accountHandler.Routes())
+		pr.Mount("/orders", orderHandler.Routes())
+		pr.Mount("/trades", tradeHandler.Routes())
+	})
 
 	port := cfg.ServerPort
 	if port == "" {
