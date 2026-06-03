@@ -1,0 +1,15 @@
+openspec/
+bin/
+.claude/
+.idea
+
+# Scratchpad design docs — not source of truth
+task.md
+prio.md
+contract.md
+matching.md
+schema.md
+
+# Compiled binaries
+/server
+*.exe

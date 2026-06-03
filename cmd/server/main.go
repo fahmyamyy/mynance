@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -16,9 +17,16 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"mynance/config"
-	"mynance/internal/handler"
-	"mynance/internal/repository"
-	"mynance/internal/service"
+	"mynance/internal/account"
+	"mynance/internal/engine"
+	"mynance/internal/eventbus"
+	"mynance/internal/idempotency"
+	"mynance/internal/ledger"
+	"mynance/internal/marketdata"
+	"mynance/internal/order"
+	"mynance/internal/outbox"
+	"mynance/internal/trade"
+	"mynance/internal/user"
 )
 
 func main() {
@@ -28,13 +36,39 @@ func main() {
 	}
 }
 
+type engineAdapter struct {
+	eng *engine.Engine
+}
+
+func (a *engineAdapter) SubmitPlace(orderID, userID, symbol, side string, price, qty float64) error {
+	return a.eng.Submit(engine.Command{
+		Kind: engine.CommandPlaceOrder,
+		Order: &engine.Order{
+			ID:        orderID,
+			UserID:    userID,
+			Symbol:    symbol,
+			Side:      engine.Side(side),
+			Price:     price,
+			Quantity:  qty,
+			Remaining: qty,
+			Timestamp: time.Now().UTC(),
+		},
+	})
+}
+
+func (a *engineAdapter) SubmitCancel(orderID, symbol string) error {
+	return a.eng.Submit(engine.Command{
+		Kind:   engine.CommandCancelOrder,
+		Cancel: &engine.CancelInfo{OrderID: orderID, Symbol: symbol},
+	})
+}
+
 func run() error {
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	// Database
 	ctx := context.Background()
 	poolConfig, err := pgxpool.ParseConfig(cfg.DatabaseURL)
 	if err != nil {
@@ -55,17 +89,45 @@ func run() error {
 	}
 	slog.Info("database connected")
 
-	// Repositories
-	userRepo := repository.NewUserRepository(pool)
-	accountRepo := repository.NewAccountRepository(pool)
+	// Stores
+	userStore := user.NewStore(pool)
+	accountStore := account.NewStore(pool)
+	ledgerStore := ledger.NewStore(pool)
+	idempotencyStore := idempotency.NewStore(pool)
+	outboxStore := outbox.NewStore(pool)
+	orderStore := order.NewStore(pool)
+	tradeStore := trade.NewStore(pool)
+
+	// EventBus + Engine
+	bus := eventbus.New()
+	eng := engine.New(bus, 1024)
+	engAdapter := &engineAdapter{eng: eng}
+	mdSvc := marketdata.NewService()
+	mdSvc.Subscribe(bus)
 
 	// Services
-	userSvc := service.NewUserService(pool, userRepo)
-	accountSvc := service.NewAccountService(pool, accountRepo, nil) // ledger not wired yet
+	ledgerSvc := ledger.NewService(ledgerStore)
+	userSvc := user.NewService(pool, userStore)
+	accountSvc := account.NewService(pool, accountStore, ledgerSvc)
+	orderSvc := order.NewServiceWithEngine(pool, orderStore, idempotencyStore, ledgerStore, outboxStore, accountSvc, engAdapter)
+	tradeSvc := trade.NewService(pool, tradeStore, idempotencyStore, ledgerStore, orderStore, outboxStore, accountSvc)
+	outboxPublisher := outbox.NewPublisher(pool, outboxStore, nil, time.Second)
+
+	// Settlement subscriber
+	settlement := engine.NewSettlementSubscriber(tradeSvc)
+	bus.Subscribe(eventbus.EventTypeTradeMatched, settlement.OnTradeMatched)
+
+	// Rehydrate engine from open/partial orders
+	if err := rehydrateEngine(ctx, pool, eng); err != nil {
+		return fmt.Errorf("rehydrate engine: %w", err)
+	}
 
 	// Handlers
-	userHandler := handler.NewUserHandler(userSvc)
-	accountHandler := handler.NewAccountHandler(accountSvc)
+	userHandler := user.NewHandler(userSvc)
+	accountHandler := account.NewHandler(accountSvc)
+	orderHandler := order.NewHandler(orderSvc)
+	tradeHandler := trade.NewHandler(tradeSvc)
+	mdHandler := marketdata.NewHandler(mdSvc)
 
 	// Router
 	r := chi.NewRouter()
@@ -83,13 +145,17 @@ func run() error {
 
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok"))
+		_, _ = w.Write([]byte("ok"))
 	})
 
 	r.Mount("/users", userHandler.Routes())
 	r.Mount("/accounts", accountHandler.Routes())
+	r.Mount("/orders", orderHandler.Routes())
+	r.Mount("/trades", tradeHandler.Routes())
+	r.Mount("/orderbook", mdHandler.OrderBookRoutes())
+	r.Mount("/marketdata/trades", mdHandler.TradesRoutes())
+	r.Get("/users/{userID}/orders", orderHandler.ListByUser)
 
-	// Server
 	port := cfg.ServerPort
 	if port == "" {
 		port = "8080"
@@ -103,9 +169,23 @@ func run() error {
 		IdleTimeout:  60 * time.Second,
 	}
 
-	// Graceful shutdown
 	shutdownCtx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	workerCtx, cancelWorkers := context.WithCancel(context.Background())
+	defer cancelWorkers()
+
+	outboxDone := make(chan struct{})
+	go func() {
+		outboxPublisher.Start(workerCtx)
+		close(outboxDone)
+	}()
+
+	engineDone := make(chan struct{})
+	go func() {
+		eng.Start(workerCtx)
+		close(engineDone)
+	}()
 
 	go func() {
 		slog.Info("server starting", "port", port)
@@ -125,6 +205,52 @@ func run() error {
 		return fmt.Errorf("server shutdown: %w", err)
 	}
 
+	cancelWorkers()
+	<-engineDone
+	<-outboxDone
 	slog.Info("server stopped")
 	return nil
+}
+
+func rehydrateEngine(ctx context.Context, pool *pgxpool.Pool, eng *engine.Engine) error {
+	rows, err := pool.Query(ctx,
+		`SELECT id::text, user_id::text, symbol, side, price::text, (quantity - filled_quantity)::text, created_at
+		 FROM orders
+		 WHERE status IN ('OPEN','PARTIAL')
+		 ORDER BY created_at ASC`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	count := 0
+	for rows.Next() {
+		var id, userID, symbol, side, priceStr, remainStr string
+		var createdAt time.Time
+		if err := rows.Scan(&id, &userID, &symbol, &side, &priceStr, &remainStr, &createdAt); err != nil {
+			return err
+		}
+		price, err := strconv.ParseFloat(priceStr, 64)
+		if err != nil {
+			slog.Warn("rehydrate parse price", "id", id, "err", err)
+			continue
+		}
+		remain, err := strconv.ParseFloat(remainStr, 64)
+		if err != nil || remain <= 0 {
+			continue
+		}
+		eng.LoadOrder(&engine.Order{
+			ID:        id,
+			UserID:    userID,
+			Symbol:    symbol,
+			Side:      engine.Side(side),
+			Price:     price,
+			Quantity:  remain,
+			Remaining: remain,
+			Timestamp: createdAt,
+		})
+		count++
+	}
+	slog.Info("engine rehydrated", "orders", count)
+	return rows.Err()
 }
