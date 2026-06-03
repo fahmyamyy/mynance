@@ -10,7 +10,7 @@ Backend reference: [README.md](./README.md). This doc covers everything an agent
 |---|---|---|
 | Framework | **Next.js 15** (App Router) | Server Components, RSC streaming, modern React 19 |
 | Auth | **Auth.js v5** (`next-auth@beta`) | Credentials provider wraps our `POST /login`; session JWT cookie holds backend token |
-| Styling | **Tailwind CSS + shadcn/ui** | Fast scaffold, exchange-grade dark mode |
+| Styling | **Tailwind CSS + shadcn/ui** (Slate base, dark mode default) | Fast scaffold; semantic tokens for buy/sell/status |
 | Forms | **react-hook-form + zod** | Mirrors backend `validator/v10` constraints |
 | Data | **TanStack Query v5** | Polling, stale-while-revalidate, retry, optimistic updates |
 | Charts | **lightweight-charts** (TradingView OSS) | Candle/line; lighter than full Recharts for finance |
@@ -332,7 +332,7 @@ export function useBalance(accountId: string) {
 
 Pattern: zod schema → `react-hook-form` → mutation → toast.
 
-### Login
+### Login (using shadcn `Form`)
 
 ```tsx
 'use client'
@@ -340,6 +340,10 @@ import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { signIn } from 'next-auth/react'
+import { toast } from 'sonner'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form'
 
 const schema = z.object({
   email: z.string().email(),
@@ -347,46 +351,144 @@ const schema = z.object({
 })
 
 export function LoginForm() {
-  const form = useForm({ resolver: zodResolver(schema) })
-  const onSubmit = async (data: z.infer<typeof schema>) => {
+  const form = useForm({ resolver: zodResolver(schema), defaultValues: { email: '', password: '' } })
+
+  async function onSubmit(data: z.infer<typeof schema>) {
     const res = await signIn('credentials', { ...data, redirect: false })
     if (res?.error) toast.error('Invalid credentials')
     else router.push('/portfolio')
   }
-  // ...
+
+  return (
+    <Form {...form}>
+      <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+        <FormField name="email" control={form.control} render={({ field }) => (
+          <FormItem>
+            <FormLabel>Email</FormLabel>
+            <FormControl><Input type="email" autoComplete="email" {...field} /></FormControl>
+            <FormMessage />
+          </FormItem>
+        )} />
+        <FormField name="password" control={form.control} render={({ field }) => (
+          <FormItem>
+            <FormLabel>Password</FormLabel>
+            <FormControl><Input type="password" autoComplete="current-password" {...field} /></FormControl>
+            <FormMessage />
+          </FormItem>
+        )} />
+        <Button type="submit" className="w-full" disabled={form.formState.isSubmitting}>
+          {form.formState.isSubmitting ? 'Signing in…' : 'Sign in'}
+        </Button>
+      </form>
+    </Form>
+  )
 }
 ```
 
-### Place order (idempotency key generated client-side)
+### Place order (idempotency key generated client-side, shadcn `Tabs` for side)
 
 ```tsx
-const placeOrderSchema = z.object({
-  symbol: z.string().regex(/^[A-Z]+-[A-Z]+$/),
+'use client'
+import { useRef } from 'react'
+import { useForm } from 'react-hook-form'
+import { zodResolver } from '@hookform/resolvers/zod'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
+import Decimal from 'decimal.js'
+import { z } from 'zod'
+import { toast } from 'sonner'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Form, FormField, FormItem, FormLabel, FormControl, FormMessage } from '@/components/ui/form'
+import { Input } from '@/components/ui/input'
+import { Button } from '@/components/ui/button'
+import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
+
+const schema = z.object({
   side: z.enum(['BUY', 'SELL']),
-  price: z.string().regex(/^\d+(\.\d+)?$/),    // strings — never floats
-  quantity: z.string().regex(/^\d+(\.\d+)?$/),
+  price: z.string().regex(/^\d+(\.\d+)?$/, 'Invalid price'),
+  quantity: z.string().regex(/^\d+(\.\d+)?$/, 'Invalid quantity'),
 })
 
-export function PlaceOrderForm({ symbol, side }: Props) {
+export function PlaceOrderForm({ symbol, balance }: { symbol: string; balance: string }) {
   const api = useApi()
   const qc = useQueryClient()
-  const idempotencyKey = useRef(crypto.randomUUID())  // stable per mount; regen on success
+  const idempotencyKey = useRef(crypto.randomUUID())
+
+  const form = useForm({
+    resolver: zodResolver(schema),
+    defaultValues: { side: 'BUY' as const, price: '', quantity: '' },
+  })
+
+  const side = form.watch('side')
+  const price = form.watch('price')
+  const quantity = form.watch('quantity')
+  const total = price && quantity ? new Decimal(price).mul(quantity).toFixed(2) : '0.00'
 
   const mutation = useMutation({
-    mutationFn: (data: z.infer<typeof placeOrderSchema>) =>
-      api.post('/orders', { ...data, idempotency_key: idempotencyKey.current }),
+    mutationFn: (data: z.infer<typeof schema>) =>
+      api.post('/orders', { symbol, ...data, idempotency_key: idempotencyKey.current }),
     onSuccess: () => {
       toast.success('Order placed')
       idempotencyKey.current = crypto.randomUUID()
+      form.reset({ side, price: '', quantity: '' })
       qc.invalidateQueries({ queryKey: ['orders', symbol] })
       qc.invalidateQueries({ queryKey: ['balance'] })
     },
     onError: (err: APIError) => {
       if (err.status === 422) toast.error('Insufficient funds')
+      else if (err.status === 401) { /* middleware will redirect */ }
       else toast.error(err.message)
     },
   })
-  // ...
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{symbol}</CardTitle>
+        <div className="text-sm text-muted-foreground">Available: {balance}</div>
+      </CardHeader>
+      <CardContent>
+        <Form {...form}>
+          <form onSubmit={form.handleSubmit((d) => mutation.mutate(d))} className="space-y-4">
+            <Tabs
+              value={side}
+              onValueChange={(v) => form.setValue('side', v as 'BUY' | 'SELL')}
+            >
+              <TabsList className="grid w-full grid-cols-2">
+                <TabsTrigger value="BUY" className="data-[state=active]:bg-buy data-[state=active]:text-buy-foreground">
+                  Buy
+                </TabsTrigger>
+                <TabsTrigger value="SELL" className="data-[state=active]:bg-sell data-[state=active]:text-sell-foreground">
+                  Sell
+                </TabsTrigger>
+              </TabsList>
+            </Tabs>
+            <FormField name="price" control={form.control} render={({ field }) => (
+              <FormItem>
+                <FormLabel>Price</FormLabel>
+                <FormControl><Input inputMode="decimal" {...field} /></FormControl>
+                <FormMessage />
+              </FormItem>
+            )} />
+            <FormField name="quantity" control={form.control} render={({ field }) => (
+              <FormItem>
+                <FormLabel>Quantity</FormLabel>
+                <FormControl><Input inputMode="decimal" {...field} /></FormControl>
+                <FormMessage />
+              </FormItem>
+            )} />
+            <div className="text-sm text-muted-foreground">Total: {total}</div>
+            <Button
+              type="submit"
+              disabled={mutation.isPending}
+              className={side === 'BUY' ? 'w-full bg-buy hover:bg-buy/90' : 'w-full bg-sell hover:bg-sell/90'}
+            >
+              {mutation.isPending ? 'Placing…' : `Place ${side}`}
+            </Button>
+          </form>
+        </Form>
+      </CardContent>
+    </Card>
+  )
 }
 ```
 
@@ -484,27 +586,93 @@ Skeletons match final shape (rows/cards), not generic spinners.
 
 ---
 
+## shadcn/ui setup
+
+Initialize once:
+
+```bash
+npx shadcn@latest init
+# Style: Default
+# Base color: Slate (or Zinc for cooler tone)
+# CSS variables: Yes (required for dark mode)
+```
+
+Then add components as needed:
+
+```bash
+npx shadcn@latest add button input label form card table tabs dialog \
+  dropdown-menu sheet skeleton badge separator avatar toast sonner \
+  alert alert-dialog select tooltip popover scroll-area
+```
+
+### Theming
+
+shadcn/ui uses CSS variables in `globals.css`. For an exchange aesthetic, override the chart colors and add semantic ones:
+
+```css
+:root {
+  --background: 0 0% 100%;
+  --foreground: 222.2 84% 4.9%;
+  /* ... defaults ... */
+
+  /* mynance-specific */
+  --buy: 142 71% 45%;          /* green */
+  --buy-foreground: 0 0% 100%;
+  --sell: 0 84% 60%;           /* red */
+  --sell-foreground: 0 0% 100%;
+  --pending: 38 92% 50%;       /* amber */
+  --filled: 217 91% 60%;       /* blue */
+  --cancelled: 215 16% 47%;    /* slate */
+}
+
+.dark {
+  --background: 222.2 84% 4.9%;
+  /* ... dark variants ... */
+  --buy: 142 71% 45%;
+  --sell: 0 84% 60%;
+}
+```
+
+Reference via Tailwind: `bg-buy text-buy-foreground` or `text-[hsl(var(--buy))]`.
+
+### Dark mode default
+
+Exchanges live in dark mode. Set in `app/layout.tsx`:
+
+```tsx
+<html lang="en" className="dark" suppressHydrationWarning>
+```
+
+Add `next-themes` + `<ThemeProvider>` later if you want a toggle.
+
+---
+
 ## Component inventory
 
-Reusable across pages:
+Reusable across pages. Each maps to shadcn/ui primitives — don't reinvent.
 
-| Component | Used on | Notes |
+| Component | Built from (shadcn) | Notes |
 |---|---|---|
-| `<OrderBook>` | trade view | bids desc / asks asc; click level to autofill price |
-| `<RecentTrades>` | trade view | local + Binance variants |
-| `<PlaceOrderForm>` | trade view | side toggle, balance display, total auto-calc |
-| `<OrderRow>` | trade view, orders page | shows status pill, cancel button when open/partial |
-| `<TradeRow>` | trades page, trade view | side color, counterparty, time |
-| `<BalanceCard>` | portfolio, deposit, withdraw | asset icon, amount, USD value (future) |
-| `<SymbolPicker>` | top nav | dropdown of `BINANCE_SYMBOLS` |
-| `<DecimalInput>` | all forms | rejects `e`, `-` for positive amounts; trims spaces |
-| `<StatusPill>` | many | color-coded (OPEN green, FILLED blue, CANCELLED gray, PENDING amber, etc.) |
-| `<DepositAddressCard>` | wallets, deposit | shows mock address, QR (future), copy button, warning "MOCK — do not send real assets" |
-| `<TickerHeader>` | trade view | symbol, last price, 24h change, volume |
-| `<EmptyState>` | every list | icon + label + CTA |
-| `<Skeleton>` (shadcn) | loading | per-shape variants |
-| `<DataTable>` | history pages | TanStack Table powered |
-| `<Toast>` | global | `sonner` |
+| `<OrderBook>` | `Card`, `Table` (custom rows), `ScrollArea` | bids desc / asks asc; click level autofills price; depth bar = `bg-buy/10` / `bg-sell/10` width % |
+| `<RecentTrades>` | `Card`, `Table`, `ScrollArea` | local + Binance variants |
+| `<PlaceOrderForm>` | `Form`, `Tabs` (BUY/SELL), `Input`, `Button`, `Label` | side toggle via Tabs; balance display via `Card`; total auto-calc |
+| `<OrderRow>` | `TableRow`, `Badge` (StatusPill), `Button` (cancel) | cancel button when OPEN/PARTIAL |
+| `<TradeRow>` | `TableRow`, `Badge` | side color via `text-buy` / `text-sell` |
+| `<BalanceCard>` | `Card`, `CardHeader`, `CardContent` | asset icon (lucide), amount, action buttons |
+| `<SymbolPicker>` | `Select` or `DropdownMenu` | options from `GET /markets` |
+| `<DecimalInput>` | `Input` + `react-hook-form` controller | `inputMode="decimal"`; rejects `e`, `-`; debounce optional |
+| `<StatusPill>` | `Badge` with `variant` per status | OPEN/PARTIAL → outline buy; FILLED → secondary blue; CANCELLED → muted; PENDING → amber outline |
+| `<DepositAddressCard>` | `Card`, `Alert` (warning), `Button` (copy) | shows mock address; `Alert variant="destructive"` for "MOCK — do not send real assets" |
+| `<TickerHeader>` | `Card` or plain flex row | symbol, last price (large), 24h change with arrow icon |
+| `<EmptyState>` | `Card`, lucide icon, `Button` | reusable empty/CTA pattern |
+| `<LoadingSkeleton>` | `Skeleton` | per-shape variants matching final layout |
+| `<DataTable>` | `Table` + TanStack Table | history pages, sortable + paginated |
+| `<ConfirmDialog>` | `AlertDialog` | cancel order, reject deposit, etc. |
+| `<SignOutButton>` | `DropdownMenu` (in `<UserMenu>`) | calls `signOut()` |
+| `<Toaster>` | `sonner` | mount once in root layout |
+| `<Tooltip>` | `Tooltip` | hover help on advanced fields (idempotency key, etc.) |
+| `<ErrorBanner>` | `Alert variant="destructive"` | stale-data / network-error fallback |
+| `<InfoBanner>` | `Alert` | "thin local book" warning on trade view |
 
 ---
 
@@ -623,13 +791,15 @@ These are downstream choices for the design phase:
 
 ## Recommended build order
 
-1. **Auth scaffold** — login, register, middleware, signed-in shell with sign-out
-2. **API client + TanStack Query setup** — `useApi`, `apiServer`, query client provider
-3. **Portfolio + wallets** — view balances, generate deposit address
-4. **Markets list** — `/markets` page driven by Binance feed
-5. **Trade view** — order book + place order form (the hardest page, do last among trader pages)
-6. **Order + trade history** — read-only pages
-7. **Withdraw flow** — modal or dedicated page
-8. **Admin section** — deposit confirm/reject + intake form
+1. **Scaffold** — `create-next-app` (App Router, TS, Tailwind, ESLint), `shadcn init`, install base components, set dark mode default
+2. **Auth scaffold** — `auth.config.ts`, login + register pages, `middleware.ts`, `<UserMenu>` in shell with `signOut()`
+3. **API client + Query provider** — `apiServer`, `apiClient`, `useApi`, root `<QueryClientProvider>` + `<Toaster>`
+4. **Layout shell** — sidebar/topbar with nav links, `<SymbolPicker>` in header
+5. **Portfolio + wallets** — balances per account, generate deposit address via `<DepositAddressCard>`
+6. **Markets list** — `/markets` page driven by Binance feed
+7. **Trade view** — order book + place order form + open orders (the hardest page)
+8. **Order + trade history** — read-only `<DataTable>` pages
+9. **Withdraw flow** — `<Dialog>` on portfolio or dedicated page
+10. **Admin section** — `/admin/deposits` list with confirm/reject `<AlertDialog>`s + intake form
 
-Each phase ships independently. After step 5 the app is usable end-to-end (for a manually-credited test user).
+Each phase ships independently. After step 7 the app is usable end-to-end (for a manually-credited test user).
