@@ -23,4 +23,5 @@ var (
 // Server errors (5xx)
 var (
 	ErrServiceUnavailable = errors.New("service unavailable")
+	ErrNotImplemented     = errors.New("not implemented")
 )

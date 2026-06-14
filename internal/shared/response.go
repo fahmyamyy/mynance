@@ -48,6 +48,8 @@ func HandleServiceError(w http.ResponseWriter, err error) {
 		status = http.StatusTooManyRequests
 	case errors.Is(err, ErrServiceUnavailable):
 		status = http.StatusServiceUnavailable
+	case errors.Is(err, ErrNotImplemented):
+		status = http.StatusNotImplemented
 	default:
 		status = http.StatusInternalServerError
 	}
