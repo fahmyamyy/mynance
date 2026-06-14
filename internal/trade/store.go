@@ -11,7 +11,7 @@ import (
 
 type Store interface {
 	Create(ctx context.Context, tx pgx.Tx, trade *Trade) error
-	ListByUser(ctx context.Context, userID uuid.UUID, limit, offset int) ([]*UserTrade, error)
+	ListByUser(ctx context.Context, userID uuid.UUID, symbol string, limit, offset int) ([]*UserTrade, error)
 }
 
 type pgxStore struct {
@@ -26,18 +26,23 @@ func NewStore(
 	}
 }
 
-func (r *pgxStore) ListByUser(ctx context.Context, userID uuid.UUID, limit, offset int) ([]*UserTrade, error) {
-	rows, err := r.db.Query(ctx,
-		`SELECT id, symbol,
-		        CASE WHEN buy_user_id = $1 THEN 'BUY' ELSE 'SELL' END AS side,
-		        price, quantity,
-		        CASE WHEN buy_user_id = $1 THEN sell_user_id ELSE buy_user_id END AS counterparty,
-		        created_at
-		 FROM trades
-		 WHERE buy_user_id = $1 OR sell_user_id = $1
-		 ORDER BY created_at DESC LIMIT $2 OFFSET $3`,
-		userID, limit, offset,
-	)
+func (r *pgxStore) ListByUser(ctx context.Context, userID uuid.UUID, symbol string, limit, offset int) ([]*UserTrade, error) {
+	query := `SELECT id, symbol,
+	                 CASE WHEN buy_user_id = $1 THEN 'BUY' ELSE 'SELL' END AS side,
+	                 price, quantity,
+	                 CASE WHEN buy_user_id = $1 THEN sell_user_id ELSE buy_user_id END AS counterparty,
+	                 created_at
+	          FROM trades
+	          WHERE (buy_user_id = $1 OR sell_user_id = $1)`
+	args := []any{userID}
+	if symbol != "" {
+		query += ` AND symbol = $2 ORDER BY created_at DESC LIMIT $3 OFFSET $4`
+		args = append(args, symbol, limit, offset)
+	} else {
+		query += ` ORDER BY created_at DESC LIMIT $2 OFFSET $3`
+		args = append(args, limit, offset)
+	}
+	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("tradeStore.ListByUser: %w", err)
 	}

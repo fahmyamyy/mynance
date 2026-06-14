@@ -66,7 +66,8 @@ func (handler *Handler) ListByUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	limit, offset := shared.ParsePagination(r)
-	trades, err := handler.tradeService.ListByUser(r.Context(), userID, limit, offset)
+	symbol := r.URL.Query().Get("symbol")
+	trades, err := handler.tradeService.ListByUser(r.Context(), userID, symbol, limit, offset)
 	if err != nil {
 		shared.HandleServiceError(w, err)
 		return
