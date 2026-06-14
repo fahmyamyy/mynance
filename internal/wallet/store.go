@@ -15,7 +15,7 @@ import (
 
 type Store interface {
 	Create(ctx context.Context, tx pgx.Tx, w *WalletAddress) error
-	GetByUserAndAsset(ctx context.Context, userID uuid.UUID, asset string) (*WalletAddress, error)
+	GetByUserAssetNetwork(ctx context.Context, userID uuid.UUID, asset string, networkID uuid.UUID) (*WalletAddress, error)
 	GetByAddress(ctx context.Context, address string) (*WalletAddress, error)
 	ListByUser(ctx context.Context, userID uuid.UUID) ([]*WalletAddress, error)
 }
@@ -28,11 +28,11 @@ func NewStore(db *pgxpool.Pool) Store {
 	return &pgxStore{db: db}
 }
 
-const walletCols = `id, user_id, asset, address, created_at`
+const walletCols = `id, user_id, asset, network_id, address, created_at`
 
 func scanWallet(s interface{ Scan(...any) error }) (*WalletAddress, error) {
 	w := &WalletAddress{}
-	if err := s.Scan(&w.ID, &w.UserID, &w.Asset, &w.Address, &w.CreatedAt); err != nil {
+	if err := s.Scan(&w.ID, &w.UserID, &w.Asset, &w.NetworkID, &w.Address, &w.CreatedAt); err != nil {
 		return nil, err
 	}
 	return w, nil
@@ -40,8 +40,9 @@ func scanWallet(s interface{ Scan(...any) error }) (*WalletAddress, error) {
 
 func (r *pgxStore) Create(ctx context.Context, tx pgx.Tx, w *WalletAddress) error {
 	_, err := tx.Exec(ctx,
-		`INSERT INTO wallet_addresses (id, user_id, asset, address, created_at) VALUES ($1, $2, $3, $4, $5)`,
-		w.ID, w.UserID, w.Asset, w.Address, w.CreatedAt,
+		`INSERT INTO wallet_addresses (id, user_id, asset, network_id, address, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6)`,
+		w.ID, w.UserID, w.Asset, w.NetworkID, w.Address, w.CreatedAt,
 	)
 	if err != nil {
 		var pgErr *pgconn.PgError
@@ -53,17 +54,17 @@ func (r *pgxStore) Create(ctx context.Context, tx pgx.Tx, w *WalletAddress) erro
 	return nil
 }
 
-func (r *pgxStore) GetByUserAndAsset(ctx context.Context, userID uuid.UUID, asset string) (*WalletAddress, error) {
+func (r *pgxStore) GetByUserAssetNetwork(ctx context.Context, userID uuid.UUID, asset string, networkID uuid.UUID) (*WalletAddress, error) {
 	row := r.db.QueryRow(ctx,
-		`SELECT `+walletCols+` FROM wallet_addresses WHERE user_id = $1 AND asset = $2`,
-		userID, asset,
+		`SELECT `+walletCols+` FROM wallet_addresses WHERE user_id = $1 AND asset = $2 AND network_id = $3`,
+		userID, asset, networkID,
 	)
 	w, err := scanWallet(row)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, shared.ErrNotFound
 		}
-		return nil, fmt.Errorf("walletStore.GetByUserAndAsset: %w", err)
+		return nil, fmt.Errorf("walletStore.GetByUserAssetNetwork: %w", err)
 	}
 	return w, nil
 }

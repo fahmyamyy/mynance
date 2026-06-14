@@ -16,8 +16,14 @@ type AccountLookup interface {
 	AccountID(ctx context.Context, userID uuid.UUID, asset string) (uuid.UUID, error)
 }
 
+// AssetCatalog supplies the network catalog the wallet service needs.
+// Implemented by an adapter over internal/asset.Service in main.go.
+type AssetCatalog interface {
+	NetworkID(ctx context.Context, assetSymbol, networkName string) (uuid.UUID, error)
+}
+
 type Service interface {
-	GetOrCreateAddress(ctx context.Context, userID uuid.UUID, asset string) (*WalletAddress, error)
+	GetOrCreateAddress(ctx context.Context, userID uuid.UUID, asset, networkName string) (*WalletAddress, error)
 	ListMyAddresses(ctx context.Context, userID uuid.UUID) ([]*WalletAddress, error)
 	GetByAddress(ctx context.Context, address string) (*WalletAddress, error)
 }
@@ -26,14 +32,23 @@ type walletService struct {
 	db       *pgxpool.Pool
 	store    Store
 	accounts AccountLookup
+	catalog  AssetCatalog
 }
 
-func NewService(db *pgxpool.Pool, store Store, accounts AccountLookup) Service {
-	return &walletService{db: db, store: store, accounts: accounts}
+func NewService(db *pgxpool.Pool, store Store, accounts AccountLookup, catalog AssetCatalog) Service {
+	return &walletService{db: db, store: store, accounts: accounts, catalog: catalog}
 }
 
-func (s *walletService) GetOrCreateAddress(ctx context.Context, userID uuid.UUID, asset string) (*WalletAddress, error) {
-	existing, err := s.store.GetByUserAndAsset(ctx, userID, asset)
+func (s *walletService) GetOrCreateAddress(ctx context.Context, userID uuid.UUID, asset, networkName string) (*WalletAddress, error) {
+	networkID, err := s.catalog.NetworkID(ctx, asset, networkName)
+	if err != nil {
+		if errors.Is(err, shared.ErrNotFound) {
+			return nil, shared.ErrValidation
+		}
+		return nil, fmt.Errorf("GetOrCreateAddress network: %w", err)
+	}
+
+	existing, err := s.store.GetByUserAssetNetwork(ctx, userID, asset, networkID)
 	if err == nil {
 		return existing, nil
 	}
@@ -41,7 +56,6 @@ func (s *walletService) GetOrCreateAddress(ctx context.Context, userID uuid.UUID
 		return nil, fmt.Errorf("GetOrCreateAddress lookup: %w", err)
 	}
 
-	// Verify user has an account for this asset
 	if _, err := s.accounts.AccountID(ctx, userID, asset); err != nil {
 		if errors.Is(err, shared.ErrNotFound) {
 			return nil, shared.ErrValidation
@@ -50,7 +64,7 @@ func (s *walletService) GetOrCreateAddress(ctx context.Context, userID uuid.UUID
 	}
 
 	for attempt := 0; attempt < 3; attempt++ {
-		addr, err := generateMockAddress(asset, userID)
+		addr, err := generateMockAddress(networkName)
 		if err != nil {
 			return nil, fmt.Errorf("GetOrCreateAddress generate: %w", err)
 		}
@@ -63,7 +77,10 @@ func (s *walletService) GetOrCreateAddress(ctx context.Context, userID uuid.UUID
 			return nil, fmt.Errorf("GetOrCreateAddress begin: %w", err)
 		}
 		now := timeutil.Now()
-		w := &WalletAddress{ID: id, UserID: userID, Asset: asset, Address: addr, CreatedAt: &now}
+		w := &WalletAddress{
+			ID: id, UserID: userID, Asset: asset, NetworkID: networkID,
+			Address: addr, CreatedAt: &now,
+		}
 		if err := s.store.Create(ctx, tx, w); err != nil {
 			tx.Rollback(ctx)
 			if errors.Is(err, shared.ErrConflict) {

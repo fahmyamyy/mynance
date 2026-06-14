@@ -28,7 +28,8 @@ func (h *Handler) Routes() chi.Router {
 }
 
 type CreateWalletRequest struct {
-	Asset string `json:"asset" validate:"required,max=20"`
+	Asset   string `json:"asset" validate:"required,max=20"`
+	Network string `json:"network" validate:"required,max=50"`
 }
 
 func (r CreateWalletRequest) Validate() error { return validate.Struct(r) }
@@ -36,15 +37,17 @@ func (r CreateWalletRequest) Validate() error { return validate.Struct(r) }
 type WalletResponse struct {
 	ID        string `json:"id"`
 	Asset     string `json:"asset"`
+	NetworkID string `json:"network_id"`
 	Address   string `json:"address"`
 	CreatedAt string `json:"created_at"`
 }
 
 func toResponse(w *WalletAddress) WalletResponse {
 	resp := WalletResponse{
-		ID:      w.ID.String(),
-		Asset:   w.Asset,
-		Address: w.Address,
+		ID:        w.ID.String(),
+		Asset:     w.Asset,
+		NetworkID: w.NetworkID.String(),
+		Address:   w.Address,
 	}
 	if w.CreatedAt != nil {
 		resp.CreatedAt = w.CreatedAt.Format(time.RFC3339)
@@ -67,7 +70,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		shared.HTTPError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	addr, err := h.walletService.GetOrCreateAddress(r.Context(), userID, req.Asset)
+	addr, err := h.walletService.GetOrCreateAddress(r.Context(), userID, req.Asset, req.Network)
 	if err != nil {
 		shared.HandleServiceError(w, err)
 		return
