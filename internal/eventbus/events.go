@@ -29,12 +29,18 @@ func (OrderRestedEvent) Type() EventType { return EventTypeOrderRested }
 type OrderCancelledEvent struct {
 	OrderID   string
 	Symbol    string
+	Side      string
+	Price     float64
+	Remaining float64
 	Timestamp time.Time
 }
 
 func (OrderCancelledEvent) Type() EventType { return EventTypeOrderCancelled }
 
 type TradeMatchedEvent struct {
+	// Seq is monotonic per symbol (each engine worker owns its own counter);
+	// it is NOT globally ordered across symbols. Consumers must rely only on
+	// per-symbol ordering and on the globally-unique order IDs for uniqueness.
 	Seq         int
 	Symbol      string
 	BuyOrderID  string
