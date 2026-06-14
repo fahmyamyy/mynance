@@ -19,6 +19,7 @@ type Deposit struct {
 	ID          uuid.UUID      `db:"id"`
 	UserID      uuid.UUID      `db:"user_id"`
 	Asset       string         `db:"asset"`
+	NetworkID   uuid.UUID      `db:"network_id"`
 	Address     string         `db:"address"`
 	Amount      pgtype.Numeric `db:"amount"`
 	TxHash      string         `db:"tx_hash"`

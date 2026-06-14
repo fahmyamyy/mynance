@@ -26,11 +26,11 @@ type pgxStore struct{ db *pgxpool.Pool }
 
 func NewStore(db *pgxpool.Pool) Store { return &pgxStore{db: db} }
 
-const cols = `id, user_id, asset, address, amount, tx_hash, status, created_at, confirmed_at`
+const cols = `id, user_id, asset, network_id, address, amount, tx_hash, status, created_at, confirmed_at`
 
 func scan(s interface{ Scan(...any) error }) (*Deposit, error) {
 	d := &Deposit{}
-	if err := s.Scan(&d.ID, &d.UserID, &d.Asset, &d.Address, &d.Amount, &d.TxHash, &d.Status, &d.CreatedAt, &d.ConfirmedAt); err != nil {
+	if err := s.Scan(&d.ID, &d.UserID, &d.Asset, &d.NetworkID, &d.Address, &d.Amount, &d.TxHash, &d.Status, &d.CreatedAt, &d.ConfirmedAt); err != nil {
 		return nil, err
 	}
 	return d, nil
@@ -38,8 +38,9 @@ func scan(s interface{ Scan(...any) error }) (*Deposit, error) {
 
 func (r *pgxStore) Create(ctx context.Context, tx pgx.Tx, d *Deposit) error {
 	_, err := tx.Exec(ctx,
-		`INSERT INTO deposits (id, user_id, asset, address, amount, tx_hash, status, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-		d.ID, d.UserID, d.Asset, d.Address, d.Amount, d.TxHash, d.Status, d.CreatedAt,
+		`INSERT INTO deposits (id, user_id, asset, network_id, address, amount, tx_hash, status, created_at)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+		d.ID, d.UserID, d.Asset, d.NetworkID, d.Address, d.Amount, d.TxHash, d.Status, d.CreatedAt,
 	)
 	if err != nil {
 		var pgErr *pgconn.PgError

@@ -47,7 +47,12 @@ type Service interface {
 	Confirm(ctx context.Context, id uuid.UUID) (*Deposit, error)
 	Reject(ctx context.Context, id uuid.UUID) (*Deposit, error)
 	ListMine(ctx context.Context, userID uuid.UUID, limit, offset int) ([]*Deposit, error)
+	Simulate(ctx context.Context, userID uuid.UUID, cmd IntakeCommand) (*Deposit, error)
 }
+
+// MaxSandboxDepositAmount caps a single sandbox-simulated deposit so a fat
+// finger in the FE cannot mint absurd balances during testing.
+const MaxSandboxDepositAmount = "100000"
 
 type depositService struct {
 	db       *pgxpool.Pool
@@ -81,7 +86,7 @@ func (s *depositService) Intake(ctx context.Context, cmd IntakeCommand) (*Deposi
 	}
 	now := timeutil.Now()
 	d := &Deposit{
-		ID: id, UserID: w.UserID, Asset: cmd.Asset, Address: cmd.Address,
+		ID: id, UserID: w.UserID, Asset: cmd.Asset, NetworkID: w.NetworkID, Address: cmd.Address,
 		Amount: cmd.Amount, TxHash: cmd.TxHash, Status: StatusPending, CreatedAt: &now,
 	}
 	if err := s.store.Create(ctx, tx, d); err != nil {
@@ -163,6 +168,44 @@ func (s *depositService) Reject(ctx context.Context, id uuid.UUID) (*Deposit, er
 
 func (s *depositService) ListMine(ctx context.Context, userID uuid.UUID, limit, offset int) ([]*Deposit, error) {
 	return s.store.ListByUser(ctx, userID, limit, offset)
+}
+
+// Simulate runs the real Intake + Confirm flow against the caller's own
+// wallet address. Gated to sandbox via route registration in main.go — when
+// the flag is off the endpoint is not mounted, so this method is unreachable.
+func (s *depositService) Simulate(ctx context.Context, userID uuid.UUID, cmd IntakeCommand) (*Deposit, error) {
+	w, err := s.wallets.GetByAddress(ctx, cmd.Address)
+	if err != nil {
+		if errors.Is(err, shared.ErrNotFound) {
+			return nil, shared.ErrNotFound
+		}
+		return nil, fmt.Errorf("Simulate wallet lookup: %w", err)
+	}
+	if w.UserID != userID {
+		return nil, shared.ErrNotFound
+	}
+
+	cmp, err := numeric.CmpString(cmd.Amount, MaxSandboxDepositAmount)
+	if err != nil {
+		return nil, shared.ErrValidation
+	}
+	if cmp > 0 {
+		return nil, shared.ErrValidation
+	}
+
+	if cmd.TxHash == "" {
+		txID, err := uuid.NewV7()
+		if err != nil {
+			return nil, fmt.Errorf("Simulate tx hash: %w", err)
+		}
+		cmd.TxHash = "sandbox-" + txID.String()
+	}
+
+	d, err := s.Intake(ctx, cmd)
+	if err != nil {
+		return nil, err
+	}
+	return s.Confirm(ctx, d.ID)
 }
 
 func (s *depositService) insertOutbox(ctx context.Context, tx pgx.Tx, eventType string, d *Deposit) error {
