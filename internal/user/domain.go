@@ -7,9 +7,16 @@ import (
 )
 
 const (
-	RoleUser  = "USER"
-	RoleAdmin = "ADMIN"
+	RoleUser   = "USER"
+	RoleAdmin  = "ADMIN"
+	RoleSystem = "SYSTEM"
 )
+
+// MarketUserID is the fixed UUID of the internal MARKET counterparty seeded by
+// migration 00015. The sandbox settlement path books the non-real side of any
+// real↔sim trade against this user so the trade lands in DB through the same
+// path as a real↔real fill.
+const MarketUserID = "00000000-0000-0000-0000-000000000001"
 
 type User struct {
 	ID           uuid.UUID  `db:"id"`

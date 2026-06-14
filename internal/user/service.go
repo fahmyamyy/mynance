@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"mynance/internal/shared"
@@ -28,9 +29,23 @@ type Service interface {
 	Login(ctx context.Context, email, password string) (*User, error)
 }
 
+// AssetProvisioner inserts a balance row for every supported asset when a
+// new user signs up. Implementations are expected to be idempotent — at
+// minimum they must not error on (user_id, asset) rows that already exist.
+type AssetProvisioner interface {
+	ProvisionAll(ctx context.Context, tx pgx.Tx, userID uuid.UUID) error
+}
+
+// noopProvisioner is used when the caller wires the user service without
+// asset provisioning (e.g. tests that only exercise auth).
+type noopProvisioner struct{}
+
+func (noopProvisioner) ProvisionAll(context.Context, pgx.Tx, uuid.UUID) error { return nil }
+
 type userService struct {
-	db    *pgxpool.Pool
-	store Store
+	db          *pgxpool.Pool
+	store       Store
+	provisioner AssetProvisioner
 }
 
 func NewService(
@@ -38,8 +53,26 @@ func NewService(
 	store Store,
 ) Service {
 	return &userService{
-		db:    db,
-		store: store,
+		db:          db,
+		store:       store,
+		provisioner: noopProvisioner{},
+	}
+}
+
+// NewServiceWithProvisioner wires the user service so CreateUser also seeds
+// per-asset balance rows inside the same transaction.
+func NewServiceWithProvisioner(
+	db *pgxpool.Pool,
+	store Store,
+	provisioner AssetProvisioner,
+) Service {
+	if provisioner == nil {
+		provisioner = noopProvisioner{}
+	}
+	return &userService{
+		db:          db,
+		store:       store,
+		provisioner: provisioner,
 	}
 }
 
@@ -73,6 +106,9 @@ func (s *userService) CreateUser(ctx context.Context, cmd CreateUserCommand) (*U
 	}
 	if err := s.store.Create(ctx, tx, u); err != nil {
 		return nil, fmt.Errorf("CreateUser: %w", err)
+	}
+	if err := s.provisioner.ProvisionAll(ctx, tx, id); err != nil {
+		return nil, fmt.Errorf("CreateUser provision assets: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("CreateUser commit: %w", err)

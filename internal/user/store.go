@@ -97,7 +97,9 @@ func (r *pgxStore) GetByEmail(ctx context.Context, email string) (*User, error) 
 
 func (r *pgxStore) List(ctx context.Context, limit, offset int) ([]*User, error) {
 	rows, err := r.db.Query(ctx,
-		`SELECT `+selectColumns+` FROM users WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT $1 OFFSET $2`,
+		`SELECT `+selectColumns+` FROM users
+		 WHERE deleted_at IS NULL AND role <> 'SYSTEM'
+		 ORDER BY created_at DESC LIMIT $1 OFFSET $2`,
 		limit, offset,
 	)
 	if err != nil {
