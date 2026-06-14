@@ -42,6 +42,22 @@ func NewService() *Service {
 func (s *Service) Subscribe(bus *eventbus.Bus) {
 	bus.Subscribe(eventbus.EventTypeOrderRested, s.OnOrderRested)
 	bus.Subscribe(eventbus.EventTypeTradeMatched, s.OnTradeMatched)
+	bus.Subscribe(eventbus.EventTypeOrderCancelled, s.OnOrderCancelled)
+}
+
+func (s *Service) OnOrderCancelled(e eventbus.Event) {
+	evt, ok := e.(eventbus.OrderCancelledEvent)
+	if !ok || evt.Remaining <= 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	book := s.bookFor(evt.Symbol)
+	side := "asks"
+	if evt.Side == "BUY" {
+		side = "bids"
+	}
+	deductLevel(book, side, evt.Price, evt.Remaining)
 }
 
 func (s *Service) OnOrderRested(e eventbus.Event) {
@@ -123,6 +139,10 @@ func addLevel(book *OrderBookView, side string, price, qty float64) {
 	*levels = append(*levels, BookLevel{Price: price, Quantity: qty})
 }
 
+// dustEpsilon: levels below this collapsed to zero. Avoids float-arithmetic
+// dust accumulating across many add/deduct cycles (e.g. simbot churn).
+const dustEpsilon = 1e-12
+
 func deductLevel(book *OrderBookView, side string, price, qty float64) {
 	levels := &book.Bids
 	if side == "asks" {
@@ -131,7 +151,7 @@ func deductLevel(book *OrderBookView, side string, price, qty float64) {
 	for i := 0; i < len(*levels); i++ {
 		if (*levels)[i].Price == price {
 			(*levels)[i].Quantity -= qty
-			if (*levels)[i].Quantity <= 0 {
+			if (*levels)[i].Quantity <= dustEpsilon {
 				*levels = append((*levels)[:i], (*levels)[i+1:]...)
 			}
 			return
