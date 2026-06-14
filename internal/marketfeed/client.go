@@ -402,7 +402,7 @@ func tickerFloat(raw map[string]json.RawMessage, key string) float64 {
 }
 
 // RawSnapshot returns the raw bid/ask level slices for callers that don't
-// need the full OrderBookSnapshot envelope (e.g. simbot).
+// need the full OrderBookSnapshot envelope (e.g. partnerfeed).
 func (c *Client) RawSnapshot(symbol string) (bids [][2]float64, asks [][2]float64, ok bool) {
 	snap, ok := c.GetOrderBook(symbol)
 	if !ok {

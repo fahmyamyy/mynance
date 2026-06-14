@@ -140,7 +140,7 @@ func addLevel(book *OrderBookView, side string, price, qty float64) {
 }
 
 // dustEpsilon: levels below this collapsed to zero. Avoids float-arithmetic
-// dust accumulating across many add/deduct cycles (e.g. simbot churn).
+// dust accumulating across many add/deduct cycles (e.g. partnerfeed churn).
 const dustEpsilon = 1e-12
 
 func deductLevel(book *OrderBookView, side string, price, qty float64) {

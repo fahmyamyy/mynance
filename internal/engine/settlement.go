@@ -18,7 +18,7 @@ import (
 // SettlementProcessor turns engine TradeMatched events into persisted trades.
 // There are two implementations, picked by main.go based on cfg.Environment.
 // Cutover from sandbox to production requires no code change — only the env
-// flag (and turning the simbot off, which is already env-gated).
+// flag (and turning the partnerfeed off, which is already env-gated).
 type SettlementProcessor interface {
 	OnTradeMatched(e eventbus.Event)
 }

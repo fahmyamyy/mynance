@@ -1,4 +1,4 @@
-package simbot
+package partnerfeed
 
 import (
 	"fmt"
@@ -22,9 +22,9 @@ type restingOrder struct {
 // Used to diff against the latest partner snapshot and decide which orders
 // to cancel and which prices to add.
 type bookState struct {
-	mu    sync.Mutex
-	bids  map[string]map[string]restingOrder // symbol → priceKey → resting
-	asks  map[string]map[string]restingOrder
+	mu   sync.Mutex
+	bids map[string]map[string]restingOrder // symbol → priceKey → resting
+	asks map[string]map[string]restingOrder
 }
 
 func newBookState() *bookState {

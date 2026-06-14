@@ -31,7 +31,7 @@ import (
 	"mynance/internal/marketfeed"
 	"mynance/internal/order"
 	"mynance/internal/outbox"
-	"mynance/internal/simbot"
+	"mynance/internal/partnerfeed"
 	"mynance/internal/trade"
 	"mynance/internal/user"
 	"mynance/internal/wallet"
@@ -279,19 +279,19 @@ func run() error {
 	// Partner ingester only runs in sandbox: in production it would inject
 	// partner liquidity into the real engine, which is exactly what production
 	// must not allow. The env guard makes the cutover config-only.
-	simbotDone := make(chan struct{})
+	partnerfeedDone := make(chan struct{})
 	if cfg.IsSandbox() && cfg.SimbotEnabled {
-		feed := simbot.FeedAdapter{Get: mfClient.RawSnapshot}
-		bot, err := simbot.New(simbot.DefaultConfig(cfg.BinanceSymbols), engAdapter, feed)
+		feed := partnerfeed.FeedAdapter{Get: mfClient.RawSnapshot}
+		bot, err := partnerfeed.New(partnerfeed.DefaultConfig(cfg.BinanceSymbols), engAdapter, feed)
 		if err != nil {
 			return fmt.Errorf("partner ingester init: %w", err)
 		}
 		go func() {
 			bot.Start(workerCtx)
-			close(simbotDone)
+			close(partnerfeedDone)
 		}()
 	} else {
-		close(simbotDone)
+		close(partnerfeedDone)
 	}
 
 	go func() {
@@ -316,7 +316,7 @@ func run() error {
 	<-engineDone
 	<-outboxDone
 	<-marketfeedDone
-	<-simbotDone
+	<-partnerfeedDone
 	slog.Info("server stopped")
 	return nil
 }

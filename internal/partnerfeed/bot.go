@@ -1,4 +1,4 @@
-// Package simbot ingests the partner exchange L2 depth snapshot into the
+// Package partnerfeed ingests the partner exchange L2 depth snapshot into the
 // local matching engine as ownerless ("partner") orders. Partner orders carry
 // an empty UserID; they live only in engine memory and are never persisted to
 // the orders/trades/ledger tables directly. A trade where one side is a
@@ -14,7 +14,7 @@
 // removed from the engine book; in sandbox the fill is booked against MARKET.
 // This is acceptable for a small-exchange showcase; routing real orders to the
 // partner exchange API is out of scope (sandbox only).
-package simbot
+package partnerfeed
 
 import (
 	"context"
@@ -124,7 +124,7 @@ func (b *Bot) sync(symbol, side string, levels [][2]float64) {
 		wantQty, keep := want[key]
 		if !keep || materialDrift(resting.qty, wantQty) {
 			if err := b.engine.SubmitCancel(resting.orderID, symbol); err != nil {
-				slog.Warn("simbot cancel", "err", err)
+				slog.Warn("partnerfeed cancel", "err", err)
 			}
 			delete(cur, key)
 		}
@@ -147,7 +147,7 @@ func (b *Bot) sync(symbol, side string, levels [][2]float64) {
 			"",
 			symbol, side, price, wantQty,
 		); err != nil {
-			slog.Warn("simbot place", "err", err)
+			slog.Warn("partnerfeed place", "err", err)
 			continue
 		}
 		cur[key] = restingOrder{orderID: orderID.String(), qty: wantQty}
