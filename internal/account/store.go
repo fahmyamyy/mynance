@@ -81,7 +81,11 @@ func (r *pgxStore) GetByUserAndAsset(ctx context.Context, userID uuid.UUID, asse
 
 func (r *pgxStore) List(ctx context.Context, limit, offset int) ([]*Account, error) {
 	rows, err := r.db.Query(ctx,
-		"SELECT id, user_id, asset, created_at FROM accounts ORDER BY created_at DESC LIMIT $1 OFFSET $2",
+		`SELECT a.id, a.user_id, a.asset, a.created_at
+		 FROM accounts a
+		 JOIN users u ON u.id = a.user_id
+		 WHERE u.role <> 'SYSTEM'
+		 ORDER BY a.created_at DESC LIMIT $1 OFFSET $2`,
 		limit, offset,
 	)
 	if err != nil {
