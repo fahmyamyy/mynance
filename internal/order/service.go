@@ -72,6 +72,11 @@ type orderService struct {
 	outbox      OutboxStore
 	accounts    AccountLookup
 	engine      EngineSubmitter
+	// markets is the allow-list of tradeable symbols. When empty, any
+	// well-formed symbol is accepted (used by the no-engine constructor); when
+	// populated it mirrors the engine's configured shards so an order for an
+	// unlisted market is rejected up front instead of failing at Submit.
+	markets map[string]struct{}
 }
 
 func NewService(
@@ -101,9 +106,14 @@ func NewServiceWithEngine(
 	outboxStore OutboxStore,
 	accounts AccountLookup,
 	engine EngineSubmitter,
+	symbols []string,
 ) Service {
 	if engine == nil {
 		engine = noopEngine{}
+	}
+	markets := make(map[string]struct{}, len(symbols))
+	for _, sym := range symbols {
+		markets[sym] = struct{}{}
 	}
 	return &orderService{
 		db:          db,
@@ -113,10 +123,26 @@ func NewServiceWithEngine(
 		outbox:      outboxStore,
 		accounts:    accounts,
 		engine:      engine,
+		markets:     markets,
 	}
 }
 
 func (s *orderService) PlaceOrder(ctx context.Context, cmd PlaceOrderCommand) (*Order, error) {
+	// An empty (nil) UserID is reserved for partner-sourced engine orders.
+	// User orders MUST carry a real UUID so the engine never misclassifies a
+	// real user as the partner counterparty at settlement.
+	if cmd.UserID == uuid.Nil {
+		return nil, fmt.Errorf("PlaceOrder: %w: missing user id", shared.ErrValidation)
+	}
+
+	// Reject unlisted markets up front so the caller gets a clean validation
+	// error rather than an OPEN order the engine refuses with ErrUnknownSymbol.
+	if len(s.markets) > 0 {
+		if _, ok := s.markets[cmd.Symbol]; !ok {
+			return nil, fmt.Errorf("PlaceOrder: %w: symbol %q not listed", shared.ErrValidation, cmd.Symbol)
+		}
+	}
+
 	base, quote, err := SplitSymbol(cmd.Symbol)
 	if err != nil {
 		return nil, fmt.Errorf("PlaceOrder: %w", err)
