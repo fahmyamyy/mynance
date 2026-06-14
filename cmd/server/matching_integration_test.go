@@ -57,7 +57,7 @@ func buildMatchingHarness(t *testing.T) *matchingHarness {
 	tradeStore := trade.NewStore(pool)
 
 	bus := eventbus.New()
-	eng := engine.New(bus, 256)
+	eng := engine.New(bus, []string{"BTC-USDT"}, 256)
 	md := marketdata.NewService()
 	md.Subscribe(bus)
 
@@ -65,7 +65,7 @@ func buildMatchingHarness(t *testing.T) *matchingHarness {
 	ledgerSvc := ledger.NewService(ledgerStore)
 	userSvc := user.NewService(pool, userStore)
 	accountSvc := account.NewService(pool, accountStore, ledgerSvc)
-	orderSvc := order.NewServiceWithEngine(pool, orderStore, idempotencyStore, ledgerStore, outboxStore, accountSvc, adapter)
+	orderSvc := order.NewServiceWithEngine(pool, orderStore, idempotencyStore, ledgerStore, outboxStore, accountSvc, adapter, []string{"BTC-USDT"})
 	tradeSvc := trade.NewService(pool, tradeStore, idempotencyStore, ledgerStore, orderStore, outboxStore, accountSvc)
 
 	settlement := engine.NewSettlementSubscriber(tradeSvc)
@@ -188,8 +188,8 @@ func TestIntegration_Rehydration_RestingOrdersLoadedFromDB(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	bus := eventbus.New()
-	eng := engine.New(bus, 256)
-	require.NoError(t, rehydrateEngine(ctx, h.pool, eng))
+	eng := engine.New(bus, []string{"BTC-USDT"}, 256)
+	require.NoError(t, rehydrateEngine(ctx, h.pool, eng, []string{"BTC-USDT"}))
 	go eng.Start(ctx)
 	time.Sleep(20 * time.Millisecond)
 

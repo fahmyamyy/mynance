@@ -21,17 +21,17 @@ migrate:
 	goose -dir migrations postgres "$(DATABASE_URL)" up
 
 swagger:
-	docker run --rm -p 8081:8080 \
+	docker run --rm -p 18081:8080 \
 		-e SWAGGER_JSON=/docs/swagger.yaml \
 		-v $(PWD)/docs:/docs \
 		swaggerapi/swagger-ui
 
 dev: build
-	@docker run --rm -d -p 8081:8080 \
+	@docker run --rm -d -p 18081:8080 \
 		-e SWAGGER_JSON=/docs/swagger.yaml \
 		-v $(PWD)/docs:/docs \
 		--name mynance-swagger \
 		swaggerapi/swagger-ui
-	@echo "Swagger UI: http://localhost:8081"
-	@echo "API Server: http://localhost:8080"
+	@echo "Swagger UI: http://localhost:18081"
+	@echo "API Server: http://localhost:18080"
 	@./$(BINARY); docker stop mynance-swagger 2>/dev/null || true
