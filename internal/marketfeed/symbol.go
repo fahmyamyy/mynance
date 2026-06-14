@@ -19,3 +19,12 @@ func fromBinance(binance string) (string, error) {
 	}
 	return "", fmt.Errorf("fromBinance: cannot split %q", binance)
 }
+
+// splitSymbol splits "BTC-USDT" → ("BTC", "USDT"). Returns ("", "") on malformed input.
+func splitSymbol(symbol string) (base, quote string) {
+	parts := strings.SplitN(symbol, "-", 2)
+	if len(parts) != 2 {
+		return "", ""
+	}
+	return parts[0], parts[1]
+}

@@ -19,23 +19,85 @@ const (
 	readDeadline    = 11 * time.Minute
 )
 
+// KlineHandler receives every kline tick parsed from Binance for any
+// (symbol, interval) the client is subscribed to.
+type KlineHandler func(k KlineSnapshot)
+
+// TickerHandler fires on every ticker tick (~1/sec per symbol from Binance).
+type TickerHandler func(t TickerSnapshot)
+
+// TradeHandler fires on every aggregated trade arrival.
+type TradeHandler func(symbol string, t TradeSnapshot)
+
 type Client struct {
-	symbols []string
-	enabled bool
+	symbols   []string
+	intervals []string
+	enabled   bool
 
 	mu     sync.RWMutex
 	books  map[string]*OrderBookSnapshot
 	tickers map[string]*TickerSnapshot
 	trades map[string][]TradeSnapshot
+
+	handlersMu     sync.RWMutex
+	klineHandlers  []KlineHandler
+	tickerHandlers []TickerHandler
+	tradeHandlers  []TradeHandler
 }
 
 func NewClient(symbols []string, enabled bool) *Client {
 	return &Client{
-		symbols: symbols,
-		enabled: enabled,
-		books:   make(map[string]*OrderBookSnapshot),
-		tickers: make(map[string]*TickerSnapshot),
-		trades:  make(map[string][]TradeSnapshot),
+		symbols:   symbols,
+		intervals: []string{"1m", "5m", "15m", "1h", "4h", "1d"},
+		enabled:   enabled,
+		books:     make(map[string]*OrderBookSnapshot),
+		tickers:   make(map[string]*TickerSnapshot),
+		trades:    make(map[string][]TradeSnapshot),
+	}
+}
+
+func (c *Client) SubscribeKline(h KlineHandler) {
+	c.handlersMu.Lock()
+	c.klineHandlers = append(c.klineHandlers, h)
+	c.handlersMu.Unlock()
+}
+
+func (c *Client) SubscribeTicker(h TickerHandler) {
+	c.handlersMu.Lock()
+	c.tickerHandlers = append(c.tickerHandlers, h)
+	c.handlersMu.Unlock()
+}
+
+func (c *Client) SubscribeTrade(h TradeHandler) {
+	c.handlersMu.Lock()
+	c.tradeHandlers = append(c.tradeHandlers, h)
+	c.handlersMu.Unlock()
+}
+
+func (c *Client) emitKline(k KlineSnapshot) {
+	c.handlersMu.RLock()
+	hs := c.klineHandlers
+	c.handlersMu.RUnlock()
+	for _, h := range hs {
+		h(k)
+	}
+}
+
+func (c *Client) emitTicker(t TickerSnapshot) {
+	c.handlersMu.RLock()
+	hs := c.tickerHandlers
+	c.handlersMu.RUnlock()
+	for _, h := range hs {
+		h(t)
+	}
+}
+
+func (c *Client) emitTrade(symbol string, t TradeSnapshot) {
+	c.handlersMu.RLock()
+	hs := c.tradeHandlers
+	c.handlersMu.RUnlock()
+	for _, h := range hs {
+		h(symbol, t)
 	}
 }
 
@@ -88,6 +150,9 @@ func (c *Client) buildURL() string {
 			b+"@trade",
 			b+"@ticker",
 		)
+		for _, iv := range c.intervals {
+			streams = append(streams, b+"@kline_"+iv)
+		}
 	}
 	return "wss://stream.binance.com:9443/stream?streams=" + strings.Join(streams, "/")
 }
@@ -151,6 +216,9 @@ func (c *Client) dispatch(msg []byte) {
 		c.onTrade(symbol, env.Data)
 	case streamType == "ticker":
 		c.onTicker(symbol, env.Data)
+	case strings.HasPrefix(streamType, "kline_"):
+		interval := strings.TrimPrefix(streamType, "kline_")
+		c.onKline(symbol, interval, env.Data)
 	}
 }
 
@@ -219,37 +287,128 @@ func (c *Client) onTrade(symbol string, data []byte) {
 	}
 	c.trades[symbol] = list
 	c.mu.Unlock()
+	c.emitTrade(symbol, trade)
 }
 
-type tickerMsg struct {
-	Open         string `json:"o"`
-	High         string `json:"h"`
-	Low          string `json:"l"`
-	Close        string `json:"c"`
-	Volume       string `json:"v"`
-	PriceChange  string `json:"p"`
-	PriceChangePct string `json:"P"`
-}
-
+// Binance @ticker payload mixes lowercase ("o","h","l","c","v","p") with uppercase
+// keys ("O","C","P","L") for distinct fields. encoding/json matches struct tags
+// case-insensitively, causing collisions — so decode into a raw map and read by
+// exact key.
 func (c *Client) onTicker(symbol string, data []byte) {
-	var t tickerMsg
-	if err := json.Unmarshal(data, &t); err != nil {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		slog.Warn("ticker unmarshal", "err", err)
 		return
 	}
-	open, _ := strconv.ParseFloat(t.Open, 64)
-	high, _ := strconv.ParseFloat(t.High, 64)
-	low, _ := strconv.ParseFloat(t.Low, 64)
-	cls, _ := strconv.ParseFloat(t.Close, 64)
-	vol, _ := strconv.ParseFloat(t.Volume, 64)
-	change, _ := strconv.ParseFloat(t.PriceChange, 64)
-	pct, _ := strconv.ParseFloat(t.PriceChangePct, 64)
+	base, quote := splitSymbol(symbol)
 	snap := &TickerSnapshot{
-		Symbol: symbol, Open: open, High: high, Low: low, Close: cls,
-		Volume: vol, Change24h: change, ChangePct24h: pct, UpdatedAt: time.Now(),
+		Symbol:       symbol,
+		Base:         base,
+		Quote:        quote,
+		Open:         tickerFloat(raw, "o"),
+		High:         tickerFloat(raw, "h"),
+		Low:          tickerFloat(raw, "l"),
+		Close:        tickerFloat(raw, "c"),
+		Volume:       tickerFloat(raw, "v"),
+		Change24h:    tickerFloat(raw, "p"),
+		ChangePct24h: tickerFloat(raw, "P"),
+		UpdatedAt:    time.Now(),
 	}
 	c.mu.Lock()
 	c.tickers[symbol] = snap
 	c.mu.Unlock()
+	c.emitTicker(*snap)
+}
+
+// onKline parses a Binance kline-stream payload (combined-stream envelope's
+// data is the full kline event, of which the "k" sub-object holds the candle
+// fields). Same case-collision rationale as onTicker — uppercase "T", "L", "V"
+// belong to distinct event-level fields, so the sub-object is decoded via raw
+// map to keep cases distinct.
+func (c *Client) onKline(symbol, interval string, data []byte) {
+	var env struct {
+		K json.RawMessage `json:"k"`
+	}
+	if err := json.Unmarshal(data, &env); err != nil {
+		return
+	}
+	if len(env.K) == 0 {
+		return
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(env.K, &raw); err != nil {
+		return
+	}
+	snap := KlineSnapshot{
+		Symbol:    symbol,
+		Interval:  interval,
+		OpenTime:  klineInt(raw, "t"),
+		CloseTime: klineInt(raw, "T"),
+		Open:      klineStr(raw, "o"),
+		High:      klineStr(raw, "h"),
+		Low:       klineStr(raw, "l"),
+		Close:     klineStr(raw, "c"),
+		Volume:    klineStr(raw, "v"),
+		Closed:    klineBool(raw, "x"),
+	}
+	c.emitKline(snap)
+}
+
+func klineInt(raw map[string]json.RawMessage, key string) int64 {
+	v, ok := raw[key]
+	if !ok {
+		return 0
+	}
+	var n int64
+	_ = json.Unmarshal(v, &n)
+	return n
+}
+
+func klineStr(raw map[string]json.RawMessage, key string) string {
+	v, ok := raw[key]
+	if !ok {
+		return ""
+	}
+	var s string
+	if err := json.Unmarshal(v, &s); err == nil {
+		return s
+	}
+	return strings.Trim(string(v), `"`)
+}
+
+func klineBool(raw map[string]json.RawMessage, key string) bool {
+	v, ok := raw[key]
+	if !ok {
+		return false
+	}
+	var b bool
+	_ = json.Unmarshal(v, &b)
+	return b
+}
+
+func tickerFloat(raw map[string]json.RawMessage, key string) float64 {
+	v, ok := raw[key]
+	if !ok {
+		return 0
+	}
+	var s string
+	if err := json.Unmarshal(v, &s); err == nil {
+		f, _ := strconv.ParseFloat(s, 64)
+		return f
+	}
+	var f float64
+	_ = json.Unmarshal(v, &f)
+	return f
+}
+
+// RawSnapshot returns the raw bid/ask level slices for callers that don't
+// need the full OrderBookSnapshot envelope (e.g. simbot).
+func (c *Client) RawSnapshot(symbol string) (bids [][2]float64, asks [][2]float64, ok bool) {
+	snap, ok := c.GetOrderBook(symbol)
+	if !ok {
+		return nil, nil, false
+	}
+	return snap.Bids, snap.Asks, true
 }
 
 func (c *Client) GetOrderBook(symbol string) (OrderBookSnapshot, bool) {
