@@ -10,7 +10,12 @@ const (
 )
 
 type Order struct {
-	ID        string
+	ID string
+	// UserID identifies the owner of the order. An empty UserID denotes a
+	// partner-sourced (ownerless) order mirrored from the partner exchange
+	// book; a non-empty UserID is a real user order. Matching never branches
+	// on this field — see isPartner in settlement.go for the single point of
+	// classification.
 	UserID    string
 	Symbol    string
 	Side      Side
@@ -172,34 +177,44 @@ func (ob *OrderBook) matchSell(sell *Order) []Trade {
 	return trades
 }
 
-func (ob *OrderBook) Cancel(orderID string) bool {
+// CancelInfo is returned by Cancel so subscribers can deduct the removed
+// quantity from any derived view (e.g. the marketdata book aggregator).
+type CancelResult struct {
+	Side      Side
+	Price     float64
+	Remaining float64
+}
+
+func (ob *OrderBook) Cancel(orderID string) (CancelResult, bool) {
 	for i, level := range ob.Bids {
-		if removed := removeFromLevel(level, orderID); removed {
+		if o, removed := removeFromLevel(level, orderID); removed {
+			res := CancelResult{Side: SideBuy, Price: level.Price, Remaining: o.Remaining}
 			if len(level.Orders) == 0 {
 				ob.Bids = append(ob.Bids[:i], ob.Bids[i+1:]...)
 			}
-			return true
+			return res, true
 		}
 	}
 	for i, level := range ob.Asks {
-		if removed := removeFromLevel(level, orderID); removed {
+		if o, removed := removeFromLevel(level, orderID); removed {
+			res := CancelResult{Side: SideSell, Price: level.Price, Remaining: o.Remaining}
 			if len(level.Orders) == 0 {
 				ob.Asks = append(ob.Asks[:i], ob.Asks[i+1:]...)
 			}
-			return true
+			return res, true
 		}
 	}
-	return false
+	return CancelResult{}, false
 }
 
-func removeFromLevel(level *PriceLevel, orderID string) bool {
+func removeFromLevel(level *PriceLevel, orderID string) (*Order, bool) {
 	for i, o := range level.Orders {
 		if o.ID == orderID {
 			level.Orders = append(level.Orders[:i], level.Orders[i+1:]...)
-			return true
+			return o, true
 		}
 	}
-	return false
+	return nil, false
 }
 
 func min(a, b float64) float64 {

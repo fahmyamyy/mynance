@@ -18,6 +18,23 @@ func makeOrder(id string, side Side, price, qty float64) *Order {
 	}
 }
 
+// TestMatch_OwnerlessOrderMatches_PreservesOwnership asserts a partner
+// (ownerless) resting order matches a user order like any other and that the
+// emitted trade keeps the user id on one side and the empty id on the other.
+func TestMatch_OwnerlessOrderMatches_PreservesOwnership(t *testing.T) {
+	ob := NewOrderBook("BTC-USDT")
+	partnerAsk := &Order{ID: "p1", UserID: "", Symbol: "BTC-USDT", Side: SideSell, Price: 30000, Quantity: 1.0, Remaining: 1.0}
+	ob.Match(partnerAsk)
+
+	userBuy := &Order{ID: "u1", UserID: "alice", Symbol: "BTC-USDT", Side: SideBuy, Price: 30000, Quantity: 1.0, Remaining: 1.0}
+	trades := ob.Match(userBuy)
+
+	require.Len(t, trades, 1)
+	require.Equal(t, "alice", trades[0].BuyUserID)
+	require.Equal(t, "", trades[0].SellUserID)
+	require.Len(t, ob.Asks, 0)
+}
+
 func TestMatch_BuyMatchesBestAskAtAskPrice(t *testing.T) {
 	ob := NewOrderBook("BTC-USDT")
 	ob.Match(makeOrder("a1", SideSell, 30000, 1.0))
@@ -88,14 +105,16 @@ func TestCancel_RemovesOrder_PreservesSiblings(t *testing.T) {
 	ob.Match(makeOrder("b1", SideBuy, 30000, 1.0))
 	ob.Match(makeOrder("b2", SideBuy, 30000, 1.0))
 
-	require.True(t, ob.Cancel("b1"))
+	_, ok := ob.Cancel("b1")
+	require.True(t, ok)
 	require.Len(t, ob.Bids[0].Orders, 1)
 	require.Equal(t, "b2", ob.Bids[0].Orders[0].ID)
 }
 
 func TestCancel_NonexistentReturnsFalse(t *testing.T) {
 	ob := NewOrderBook("BTC-USDT")
-	require.False(t, ob.Cancel("nope"))
+	_, ok := ob.Cancel("nope")
+	require.False(t, ok)
 }
 
 func TestAddBid_DescendingInsert(t *testing.T) {
