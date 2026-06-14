@@ -13,6 +13,8 @@ import (
 type Service interface {
 	Insert(ctx context.Context, tx pgx.Tx, entry *LedgerEntry) error
 	SumByUserAsset(ctx context.Context, userID uuid.UUID, asset string) (string, error)
+	ListByUser(ctx context.Context, filter ListFilter) ([]*LedgerEntry, error)
+	CountByUser(ctx context.Context, filter ListFilter) (int, error)
 }
 
 type ledgerService struct {
@@ -40,4 +42,20 @@ func (s *ledgerService) SumByUserAsset(ctx context.Context, userID uuid.UUID, as
 		return "", fmt.Errorf("ledgerService.SumByUserAsset: %w", err)
 	}
 	return balance, nil
+}
+
+func (s *ledgerService) ListByUser(ctx context.Context, filter ListFilter) ([]*LedgerEntry, error) {
+	entries, err := s.store.ListByUser(ctx, filter)
+	if err != nil {
+		return nil, fmt.Errorf("ledgerService.ListByUser: %w", err)
+	}
+	return entries, nil
+}
+
+func (s *ledgerService) CountByUser(ctx context.Context, filter ListFilter) (int, error) {
+	total, err := s.store.CountByUser(ctx, filter)
+	if err != nil {
+		return 0, fmt.Errorf("ledgerService.CountByUser: %w", err)
+	}
+	return total, nil
 }

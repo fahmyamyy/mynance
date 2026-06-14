@@ -25,6 +25,14 @@ func (s *stubLedgerStore) SumByUserAsset(_ context.Context, _ uuid.UUID, _ strin
 	return s.balance, s.err
 }
 
+func (s *stubLedgerStore) ListByUser(_ context.Context, _ ledger.ListFilter) ([]*ledger.LedgerEntry, error) {
+	return nil, nil
+}
+
+func (s *stubLedgerStore) CountByUser(_ context.Context, _ ledger.ListFilter) (int, error) {
+	return 0, nil
+}
+
 func TestLedgerService_SumByUserAsset_ZeroWhenNoEntries(t *testing.T) {
 	svc := ledger.NewService(&stubLedgerStore{balance: "0"})
 
