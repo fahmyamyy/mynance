@@ -8,7 +8,7 @@ import (
 	"mynance/internal/domain"
 )
 
-type errorResponse struct {
+type ErrorResponse struct {
 	Error string `json:"error"`
 }
 
@@ -48,5 +48,5 @@ func handleServiceError(w http.ResponseWriter, err error) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(errorResponse{Error: err.Error()})
+	_ = json.NewEncoder(w).Encode(ErrorResponse{Error: err.Error()})
 }

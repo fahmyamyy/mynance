@@ -1,5 +1,5 @@
 server:
-  port: "8080"
+  port: "18080"
 
 log:
   level: "info"
@@ -12,3 +12,23 @@ db:
 
 outbox:
   poll_interval_seconds: 1
+
+# JWT_SECRET must be >= 32 chars. Override via env var in production.
+jwt:
+  secret: "dev-only-secret-change-in-prod-32!"
+
+cors:
+  allowed_origins: "http://localhost:13000"
+
+# simbot mirrors Binance L2 depth into the engine as synthetic users.
+# Engine-memory only; no rows are written to orders/trades/ledger for sim
+# orders. Real users only — leave off in production-like setups.
+simbot:
+  enabled: true
+
+# environment toggles sandbox-only behaviour. Recognised values:
+#   - production: real semantics, no test-only endpoints
+#   - sandbox:    exposes POST /deposits/simulate so the FE can fake an
+#                 on-chain deposit and exercise the real ledger flow.
+# Anything else is treated as production. Override via ENVIRONMENT env var.
+environment: sandbox

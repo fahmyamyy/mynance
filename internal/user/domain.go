@@ -1,0 +1,36 @@
+package user
+
+import (
+	"time"
+
+	"github.com/google/uuid"
+)
+
+const (
+	RoleUser   = "USER"
+	RoleAdmin  = "ADMIN"
+	RoleSystem = "SYSTEM"
+)
+
+// MarketUserID is the fixed UUID of the internal MARKET counterparty seeded by
+// migration 00015. The sandbox settlement path books the non-real side of any
+// real↔sim trade against this user so the trade lands in DB through the same
+// path as a real↔real fill.
+const MarketUserID = "00000000-0000-0000-0000-000000000001"
+
+type User struct {
+	ID           uuid.UUID  `db:"id"`
+	Email        string     `db:"email"`
+	Username     string     `db:"username"`
+	FullName     string     `db:"full_name"`
+	PasswordHash string     `db:"password_hash"`
+	Status       string     `db:"status"` // ACTIVE | SUSPENDED | CLOSED
+	Role         string     `db:"role"`   // USER | ADMIN
+	DeletedAt    *time.Time `db:"deleted_at"`
+	CreatedAt    *time.Time `db:"created_at"`
+	UpdatedAt    *time.Time `db:"updated_at"`
+}
+
+func NewUserID() (uuid.UUID, error) {
+	return uuid.NewV7()
+}
